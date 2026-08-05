@@ -1,0 +1,11 @@
+defaults:
+  - rfd3_train_pn_unit
+  - _self_
+
+dataset:
+  dataset:
+    data: ${paths.data.ss_adj_pn_units_train_metadata}
+  transform:
+    ss_adj_enabled: true
+    ss_adj_loop_adj: false
+    reject_short_multichain_local_tokens: true

@@ -1,0 +1,57 @@
+# @package _global_
+name: ss-adj-phase1a
+tags: [ss-adj, finetune, phase1a, adapter-warmup]
+
+ckpt_config:
+  _target_: foundry.utils.weights.CheckpointConfig
+  path: ???
+  reset_optimizer: true
+  weight_loading_config:
+    _target_: foundry.utils.weights.WeightLoadingConfig
+    default_policy: copy
+    fallback_policy: reinit
+  parameter_freezing_config:
+    _target_: foundry.utils.weights.ParameterFreezingConfig
+    freeze_by_default: true
+    param_policies:
+      "model.token_initializer.ss_adapter.*": false
+      "model.token_initializer.adj_adapter.*": false
+
+trainer:
+  # Loading epoch-0605 starts at epoch 606; epochs 606-613 give 76,800 examples
+  # across 4 GPUs (9,600/epoch × 8 epochs = 76,800 total; 2,400 steps/epoch/GPU).
+  max_epochs: 614
+  n_examples_per_epoch: 9600
+  validate_every_n_epochs: 2
+  checkpoint_every_n_epochs: 1
+  limit_val_batches: 32
+  grad_accum_steps: 1
+  # train_ss_adj.py applies freezing before DDP bucket construction.
+  find_unused_parameters: false
+
+model:
+  net:
+    token_initializer:
+      ss_adapter:
+        enabled: true
+      adj_adapter:
+        enabled: true
+    inference_sampler:
+      cfg_features:
+        - ref_atomwise_rasa
+        - active_donor
+        - active_acceptor
+        - ss_ratio
+        - ss_labels
+        - adj_matrix
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 1.0e-4
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+  lr_scheduler:
+    _target_: foundry.training.schedulers.AF3Scheduler
+    base_lr: 1.0e-4
+    warmup_steps: 1440
+    decay_factor: 0.95
+    decay_steps: 5000

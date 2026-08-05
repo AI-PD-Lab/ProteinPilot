@@ -1,0 +1,11 @@
+defaults:
+  - ss_adj_design
+  - _self_
+
+train:
+  standard:
+    probability: 1.0
+  loop: null
+
+val:
+  loop: null

@@ -1,0 +1,4 @@
+_target_: rfd3.metrics.losses.AdjacencyContactLoss
+weight: 1.0
+threshold: 6.0
+softness: 2.0

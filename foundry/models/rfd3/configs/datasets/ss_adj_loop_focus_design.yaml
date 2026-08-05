@@ -1,0 +1,16 @@
+defaults:
+  - ss_adj_design
+  - _self_
+
+train:
+  standard:
+    probability: 0.70
+  loop:
+    probability: 0.30
+
+val:
+  loop:
+    dataset:
+      transform:
+        # AtomArray-based validation metrics require the retained structure object.
+        return_atom_array: true

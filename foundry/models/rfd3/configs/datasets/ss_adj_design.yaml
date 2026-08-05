@@ -1,0 +1,95 @@
+defaults:
+  - train/pdb/ss_adj_standard_interface@train.standard.sub_datasets.interface
+  - train/pdb/ss_adj_standard_pn_unit@train.standard.sub_datasets.pn_unit
+  - train/ss_adj_loop@train.loop
+  - train/ss_adj_loop@val.loop
+  - conditions/unconditional@global_transform_args.train_conditions.unconditional
+  - conditions/island@global_transform_args.train_conditions.island
+  - conditions/tipatom@global_transform_args.train_conditions.tipatom
+  - conditions/sequence_design@global_transform_args.train_conditions.sequence_design
+  - conditions/ppi@global_transform_args.train_conditions.ppi
+  - _self_
+
+pipeline_target: rfd3.transforms.pipelines.build_atom14_base_pipeline
+
+diffusion_batch_size_train: 16
+diffusion_batch_size_inference: 8
+crop_size: 256
+n_recycles_train: 2
+n_recycles_validation: 1
+max_atoms_in_crop: 2560
+
+global_transform_args:
+  n_atoms_per_token: 14
+  central_atom: CB
+  sigma_perturb: 2.0
+  sigma_perturb_com: 1.0
+  association_scheme: dense
+  center_option: diffuse
+  generate_conformers: true
+  generate_conformers_for_non_protein_only: true
+  provide_reference_conformer_when_unmasked: true
+  ground_truth_conformer_policy: IGNORE
+  provide_elements_for_unindexed_components: true
+  use_element_for_atom_names_of_atomized_tokens: true
+  keep_full_binder_in_spatial_crop: false
+  max_binder_length: 170
+  max_ppi_hotspots_frac_to_provide: 0.2
+  ppi_hotspot_max_distance: 4.5
+  max_ss_frac_to_provide: 0.4
+  min_ss_island_len: 1
+  max_ss_island_len: 10
+  train_conditions:
+    unconditional:
+      frequency: 5.0
+    sequence_design:
+      frequency: 2.0
+    island:
+      frequency: 1.0
+    tipatom:
+      frequency: 0.0
+    ppi:
+      frequency: 0.0
+  meta_conditioning_probabilities:
+    calculate_hbonds: 0.0
+    calculate_rasa: 0.6
+    keep_protein_motif_rasa: 0.1
+    hbond_subsample: 0.5
+    unindex_leak_global_index: 0.10
+    unindex_insert_random_break: 0.10
+    unindex_remove_random_break: 0.10
+    add_1d_ss_features: 0.1
+    featurize_plddt: 0.9
+    add_global_is_non_loopy_feature: 0.99
+    add_ppi_hotspots: 0.75
+    full_binder_crop: 0.75
+
+train:
+  standard:
+    probability: 0.93
+  loop:
+    probability: 0.07
+
+val:
+  loop:
+    dataset:
+      dataset:
+        name: ss_adj_loop_val
+        data: ${paths.data.ss_adj_loop_val_metadata}
+      transform:
+        # Validation metrics reconstruct and score AtomArray outputs.
+        return_atom_array: true
+        reject_short_multichain_local_tokens: false
+        # Keep validation focused on SS/ADJ. Generic island conditioning creates
+        # unindexed motifs whose output reconstruction is unrelated to this gate.
+        train_conditions:
+          unconditional:
+            frequency: 1.0
+          sequence_design:
+            frequency: 0.0
+          island:
+            frequency: 0.0
+          tipatom:
+            frequency: 0.0
+          ppi:
+            frequency: 0.0

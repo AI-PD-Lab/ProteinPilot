@@ -1,0 +1,172 @@
+# @package _global_
+#
+# Restart of the SS/ADJ finetuning curriculum from rfd3_latest.ckpt (current_epoch=570),
+# incorporating everything learned from the Phase 2-4 catastrophic-forgetting-of-motif-
+# scaffolding investigation:
+#
+#   1. Real motif conditioning (island/tipatom/ppi) at meaningful frequency from the
+#      very start, instead of the narrow island=1.0/tipatom=0.0/ppi=0.0 mixture used
+#      throughout the original curriculum. (Phase 1/1A/1B freeze the base model
+#      entirely -- see below -- so this mixture can't prevent forgetting here since
+#      there's nothing to forget yet; it's included so the newly-training
+#      ss_adapter/adj_adapter modules learn to coexist with real motif examples from
+#      the start, rather than purely on de-novo-only examples.)
+#   2. `FeaturizeSSADJ.motif_region_mask_prob` (0.5) strips SS/ADJ from motif tokens
+#      on half the motif examples, reproducing the `ss_adj_contig` inference pattern
+#      (real SS/ADJ on the diffused region, motif tokens ss=3/adj=2 including cross
+#      terms). The six CFG-dropout modes are motif-blind and essentially never
+#      produce that motif-aligned split on their own.
+#
+# NOT done (an earlier revision tried it and it was wrong): routing motif examples
+# around FeaturizeSSADJ so the ss_labels/adj_matrix keys are genuinely absent. Both
+# adapters zero their masked state, so an all-masked tensor is bit-identical to an
+# absent key from the model's point of view -- the CFG unconditional mode already
+# covers it. Skipping the transform only dropped the adapters out of the autograd
+# graph and broke training (no-trainable-param in adapter-only phases; DDP
+# unused-parameter errors in full-model phases). See pipelines.py for details.
+#
+# Base model is FULLY FROZEN except the new ss_adapter/adj_adapter (identical policy to
+# the original ss_adj_phase1.yaml) -- this phase cannot cause forgetting since no
+# pretrained weight is touched; only the new adapters learn.
+#
+# Usage:
+#   python models/rfd3/src/rfd3/train_ss_adj.py \
+#       experiment=ss_adj_restart_phase1 \
+#       datasets=ss_adj_design \
+#       datasets.train.loop=null \
+#       datasets.train.standard.probability=1.0 \
+#       datasets.val=null \
+#       "paths/data=local_v181bb_ss_adj" \
+#       ckpt_config.path=/path/to/rfd3_latest.ckpt \
+#       paths.log_dir=/path/to/logs \
+#       trainer.devices_per_node=4 trainer.num_nodes=1
+
+name: ss-adj-restart-phase1
+tags: [ss-adj, finetune, restart, phase1, adapter-only, motif-aware]
+
+ckpt_config:
+  _target_: foundry.utils.weights.CheckpointConfig
+  path: ???
+  reset_optimizer: true
+  weight_loading_config:
+    _target_: foundry.utils.weights.WeightLoadingConfig
+    default_policy: copy
+    fallback_policy: reinit
+  parameter_freezing_config:
+    _target_: foundry.utils.weights.ParameterFreezingConfig
+    freeze_by_default: true
+    param_policies:
+      "model.token_initializer.ss_adapter.*": false
+      "model.token_initializer.adj_adapter.*": false
+
+trainer:
+  # max_epochs is an ABSOLUTE target epoch. rfd3_latest.ckpt's current_epoch is 570,
+  # so this is 6 epochs = 57,600 examples.
+  #
+  # This SINGLE phase replaces the original curriculum's three adapter stages
+  # (phase1 + phase1a + phase1b = ~252,000 examples, ~4 days on 4xH100), because:
+  #
+  #   * All three trained the SAME two adapters together -- identical param_policies
+  #     ("ss_adapter.*": false, "adj_adapter.*": false); phase1b merely inherits
+  #     phase1a. None of them trained one adapter in isolation.
+  #   * phase1b's actual distinguishing purpose was the curated loop corpus
+  #     (datasets=ss_adj_loop_focus_design, SAbDab/STCRDab/M-CSA). That dataset does
+  #     not exist on this cluster -- every run here passes datasets.train.loop=null --
+  #     so phase1b would degenerate to phase1a at half LR, which AF3Scheduler's own
+  #     decay already provides.
+  #   * The trainable surface here is 1,920 parameters: nn.Embedding(4, 384) for SS
+  #     plus nn.Embedding(3, 128) for ADJ -- seven vectors, 0.0006% of the 336M model.
+  #     252k examples to fit seven embedding vectors is wildly disproportionate.
+  #
+  # Under-training here is also recoverable: Phase 2 sets freeze_by_default=false, so
+  # the adapters keep learning there. This phase only needs to lift them off zero-init
+  # before the trunk starts moving at 2e-6. 6 epochs also fits one 24h SLURM job.
+  max_epochs: 576
+  n_examples_per_epoch: 9600
+  validate_every_n_epochs: 99999
+  checkpoint_every_n_epochs: 1
+  grad_accum_steps: 1
+
+datasets:
+  # Mixture is DELIBERATELY NOT pretrain.yaml's (uncond=2, island=2, seq=0.5,
+  # tipatom=5, ppi=0). Those ratios are tuned for base RFD3 pretraining, where
+  # motif/tipatom scaffolding IS the product. Adopting them verbatim here would cut
+  # pure de-novo SS/ADJ exposure from the original curriculum's 62.5% to 17.4% --
+  # a 3.6x reduction in exactly the capability the de-novo adjacency benchmark
+  # measures and that epoch-0645/0651 were genuinely good at. The mechanism
+  # (IslandCondition/TipatomCondition/PPICondition in training_conditions.py) is
+  # byte-identical to canonical RFD3; only these frequencies differ, and only
+  # because this finetune has two objectives the base recipe doesn't.
+  #
+  # Resulting exposure (every example gets FeaturizeSSADJ; the six CFG-dropout modes
+  # then decide how much is actually revealed, incl. 10% fully unconditional):
+  #   de novo (no motif)       34.8%   <- "adjacency+SS alone"
+  #   real motif present       60.9%   <- "adjacency+SS onto a fixed target"
+  #                                       (island 17.4 / tipatom 17.4 / ppi 26.1)
+  #   sequence_design           4.3%
+  # ppi is weighted above tipatom because our target use case (whole chains fixed,
+  # large region designed around them -- e.g. the 5OQV case) is structurally a PPI/
+  # binder-design task, not a tip-atom active-site task.
+  global_transform_args:
+    train_conditions:
+      unconditional:
+        frequency: 4.0
+      island:
+        frequency: 2.0
+      sequence_design:
+        frequency: 0.5
+      tipatom:
+        frequency: 2.0
+      ppi:
+        frequency: 3.0
+  train:
+    standard:
+      sub_datasets:
+        pn_unit:
+          dataset:
+            dataset_parser:
+              _target_: atomworks.ml.datasets.parsers.TarBackedPNUnitsDFParser
+              tar_path: ${paths.data.pdb_mirror_tar_path}
+              index_path: ${paths.data.pdb_mirror_tar_index_path}
+        interface:
+          dataset:
+            dataset_parser:
+              _target_: atomworks.ml.datasets.parsers.TarBackedInterfacesDFParser
+              tar_path: ${paths.data.pdb_mirror_tar_path}
+              index_path: ${paths.data.pdb_mirror_tar_index_path}
+
+model:
+  net:
+    token_initializer:
+      ss_adapter:
+        enabled: true
+      adj_adapter:
+        enabled: true
+    inference_sampler:
+      cfg_features:
+        - ref_atomwise_rasa
+        - active_donor
+        - active_acceptor
+        - ss_ratio
+        - ss_labels
+        - adj_matrix
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 1.0e-4
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+  lr_scheduler:
+    _target_: foundry.training.schedulers.AF3Scheduler
+    base_lr: 1.0e-4
+    # Schedule sized for THIS phase, not inherited blindly. 9,600 examples/epoch over
+    # 4 GPUs = 2,400 steps/epoch/GPU; 6 epochs = 14,400 total steps.
+    #   warmup 720 = 5.0% of the run. The original phase1's 200 was 0.8% of its far
+    #   longer 24,600-step schedule; carrying it over would have warmed up in 1.4%
+    #   here. phase1a/1b used 7.5%. 5% sits between them and is appropriate given
+    #   reset_optimizer=true (Adam's second-moment estimates start cold).
+    # decay_steps 5000 over 14,400 steps = ~2.9 decay events -> final LR ~8.6e-5,
+    #   i.e. deliberately gentle: this phase is short and we want the adapters to
+    #   keep learning throughout rather than anneal to a stop.
+    warmup_steps: 720
+    decay_factor: 0.95
+    decay_steps: 5000

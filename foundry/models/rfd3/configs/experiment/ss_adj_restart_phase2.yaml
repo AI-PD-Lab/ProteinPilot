@@ -1,0 +1,99 @@
+# @package _global_
+#
+# Restart curriculum, Phase 2 equivalent -- FULL MODEL UNFROZEN for the first time.
+# See ss_adj_restart_phase1.yaml for full rationale. This is the phase that caused
+# the original catastrophic forgetting of motif-scaffolding (full unfreeze +
+# narrow island=1.0/tipatom=0.0/ppi=0.0 mixture, 30 epochs across the original
+# Phase2_revised + Phase3). This time the corrected mixture is active from the
+# start of this phase, plus the already-fixed block-pair-level AdjacencyContactLoss
+# (introduced only at the original Phase 3, but proven correct -- no reason to
+# withhold it here). Continues from Phase 1B's output checkpoint (epoch-0627).
+
+name: ss-adj-restart-phase2
+tags: [ss-adj, finetune, restart, phase2, full-model, motif-aware]
+
+defaults:
+  - /trainer/loss/losses/adjacency_contact_loss@trainer.loss.adjacency_contact_loss
+  - _self_
+
+ckpt_config:
+  _target_: foundry.utils.weights.CheckpointConfig
+  path: ???
+  reset_optimizer: true
+  weight_loading_config:
+    _target_: foundry.utils.weights.WeightLoadingConfig
+    default_policy: copy
+    fallback_policy: reinit
+  parameter_freezing_config:
+    _target_: foundry.utils.weights.ParameterFreezingConfig
+    freeze_by_default: false
+    param_policies:
+      "shadow.*": true
+
+trainer:
+  # Loading epoch-0576 (output of the consolidated adapter phase) starts at epoch 577.
+  # 24 epochs matches the original Phase2_revised length (622->646). This is where the
+  # real work happens -- all 336M params train here, vs 1,920 in the adapter phase --
+  # so it is NOT shortened.
+  max_epochs: 600
+  n_examples_per_epoch: 12000
+  validate_every_n_epochs: 99999
+  checkpoint_every_n_epochs: 1
+  grad_accum_steps: 1
+  find_unused_parameters: false
+
+datasets:
+  global_transform_args:
+    train_conditions:
+      unconditional:
+        frequency: 4.0
+      island:
+        frequency: 2.0
+      sequence_design:
+        frequency: 0.5
+      tipatom:
+        frequency: 2.0
+      ppi:
+        frequency: 3.0
+  train:
+    standard:
+      sub_datasets:
+        pn_unit:
+          dataset:
+            dataset_parser:
+              _target_: atomworks.ml.datasets.parsers.TarBackedPNUnitsDFParser
+              tar_path: ${paths.data.pdb_mirror_tar_path}
+              index_path: ${paths.data.pdb_mirror_tar_index_path}
+        interface:
+          dataset:
+            dataset_parser:
+              _target_: atomworks.ml.datasets.parsers.TarBackedInterfacesDFParser
+              tar_path: ${paths.data.pdb_mirror_tar_path}
+              index_path: ${paths.data.pdb_mirror_tar_index_path}
+
+model:
+  net:
+    token_initializer:
+      ss_adapter:
+        enabled: true
+      adj_adapter:
+        enabled: true
+    inference_sampler:
+      cfg_features:
+        - ref_atomwise_rasa
+        - active_donor
+        - active_acceptor
+        - ss_ratio
+        - ss_labels
+        - adj_matrix
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 2.0e-6
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+  lr_scheduler:
+    _target_: foundry.training.schedulers.AF3Scheduler
+    base_lr: 2.0e-6
+    warmup_steps: 250
+    decay_factor: 0.95
+    decay_steps: 6000

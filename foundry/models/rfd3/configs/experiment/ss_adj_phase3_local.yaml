@@ -1,0 +1,101 @@
+# @package _global_
+#
+# Phase 3 (local, standard-corpus-only): continues Phase 2's full-model-unfrozen
+# policy from epoch-0645.ckpt, adds AdjacencyContactLoss (metrics/losses.py) on
+# top of the existing diffusion+sequence losses, and picks up the two
+# ss_adj_transforms.py CFG-dropout fixes (scaled completeness ceiling,
+# connectivity-biased pair selection) for free since they're the same file.
+#
+# No curated SS/ADJ loop dataset is available on this cluster -- run with
+# datasets=ss_adj_design datasets.train.loop=null datasets.train.standard.probability=1.0
+# datasets.val=null "paths/data=local_v181bb_ss_adj" (standard-only, no validation).
+#
+# Usage:
+#   python models/rfd3/src/rfd3/train_ss_adj.py \
+#       experiment=ss_adj_phase3_local \
+#       datasets=ss_adj_design \
+#       datasets.train.loop=null \
+#       datasets.train.standard.probability=1.0 \
+#       datasets.val=null \
+#       "paths/data=local_v181bb_ss_adj" \
+#       ckpt_config.path=/path/to/epoch-0645.ckpt \
+#       paths.log_dir=/path/to/logs \
+#       trainer.devices_per_node=4 trainer.num_nodes=1
+
+name: ss-adj-phase3-local
+tags: [ss-adj, finetune, phase3, local-standard-only, adjacency-contact-loss]
+
+defaults:
+  - /trainer/loss/losses/adjacency_contact_loss@trainer.loss.adjacency_contact_loss
+  - _self_
+
+ckpt_config:
+  _target_: foundry.utils.weights.CheckpointConfig
+  path: ???
+  reset_optimizer: true
+  weight_loading_config:
+    _target_: foundry.utils.weights.WeightLoadingConfig
+    default_policy: copy
+    fallback_policy: reinit
+  parameter_freezing_config:
+    _target_: foundry.utils.weights.ParameterFreezingConfig
+    freeze_by_default: false
+    param_policies:
+      "shadow.*": true
+
+trainer:
+  # max_epochs is an ABSOLUTE target epoch, not a relative count (matches every
+  # other ss_adj_phase*.yaml's convention) -- the loop stops as soon as
+  # current_epoch >= max_epochs (foundry/trainers/fabric.py). epoch-0645.ckpt's
+  # current_epoch is 645, so this must be 645 + (desired new epochs), not just
+  # the desired new epoch count, or the run exits immediately with 0 new steps.
+  max_epochs: 665  # 645 + 20 new epochs
+  n_examples_per_epoch: 9600  # matches Phase 1A/1B scale (across all 4 GPUs)
+  validate_every_n_epochs: 99999
+  checkpoint_every_n_epochs: 1
+  grad_accum_steps: 1
+  find_unused_parameters: false
+
+datasets:
+  train:
+    standard:
+      sub_datasets:
+        pn_unit:
+          dataset:
+            dataset_parser:
+              _target_: atomworks.ml.datasets.parsers.TarBackedPNUnitsDFParser
+              tar_path: ${paths.data.pdb_mirror_tar_path}
+              index_path: ${paths.data.pdb_mirror_tar_index_path}
+        interface:
+          dataset:
+            dataset_parser:
+              _target_: atomworks.ml.datasets.parsers.TarBackedInterfacesDFParser
+              tar_path: ${paths.data.pdb_mirror_tar_path}
+              index_path: ${paths.data.pdb_mirror_tar_index_path}
+
+model:
+  net:
+    token_initializer:
+      ss_adapter:
+        enabled: true
+      adj_adapter:
+        enabled: true
+    inference_sampler:
+      cfg_features:
+        - ref_atomwise_rasa
+        - active_donor
+        - active_acceptor
+        - ss_ratio
+        - ss_labels
+        - adj_matrix
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 2.0e-6
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+  lr_scheduler:
+    _target_: foundry.training.schedulers.AF3Scheduler
+    base_lr: 2.0e-6
+    warmup_steps: 250
+    decay_factor: 0.95
+    decay_steps: 6000

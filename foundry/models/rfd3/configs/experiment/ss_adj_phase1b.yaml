@@ -1,0 +1,25 @@
+# @package _global_
+defaults:
+  - ss_adj_phase1a
+  - _self_
+
+name: ss-adj-phase1b
+tags: [ss-adj, finetune, phase1b, adapter-loop-focus]
+
+trainer:
+  # Loading epoch-0613 starts at epoch 614; epochs 614-621 give 76,800 examples
+  # across 4 GPUs (9,600/epoch × 8 epochs; 2,400 steps/epoch/GPU; 19,200 total).
+  max_epochs: 622
+  n_examples_per_epoch: 9600
+  validate_every_n_epochs: 1
+  checkpoint_every_n_epochs: 1
+  limit_val_batches: 64
+
+model:
+  optimizer:
+    lr: 5.0e-5
+  lr_scheduler:
+    base_lr: 5.0e-5
+    warmup_steps: 1440
+    decay_factor: 0.95
+    decay_steps: 5000

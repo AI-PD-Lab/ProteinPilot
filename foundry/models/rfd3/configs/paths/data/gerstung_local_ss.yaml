@@ -1,0 +1,13 @@
+# Local paths for Gerstung lab cluster — same as gerstung_local but with the
+# ss-ratio-enriched training parquet for Phase 3 stratified sampling.
+
+pdb_data_dir: /work/gerstung/RFD3_Training/Data_Mirrors/pdb
+pdb_parquet_dir: /work/gerstung/RFD3_Training/Data_Mirrors/metadata/ss_ratio_splits
+
+monomer_distillation_data_dir: null
+monomer_distillation_parquet_dir: null
+design_benchmark_data_dir: null
+design_model_weight_dir: null
+residue_cache_dir: null
+cif_cache_dir: /work/gerstung/RFD3_Training/Data_Mirrors/cif_cache
+failed_examples_dir: /work/gerstung/RFD3_Training/logs/failed_examples
