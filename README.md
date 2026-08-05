@@ -84,6 +84,24 @@ python checkpoints/download.py
 This fetches `epoch-0670_localattn.ckpt` into `checkpoints/`. If the HF repo
 is private, run `huggingface-cli login` (or set `HF_TOKEN`) first.
 
+### Keeping Hugging Face in sync
+
+A `pre-push` hook mirrors the checkpoint + model card to
+`Jetzu77/Harmonia` automatically whenever you `git push`. Enable it once per
+clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It only re-uploads the (large) checkpoint when its size/mtime changed since
+the last sync — otherwise it just refreshes the model card, which is cheap.
+It never blocks the GitHub push: if `huggingface_hub` isn't installed, no
+one's logged in, or the upload fails, it prints a warning and lets the push
+through anyway. The checkpoint isn't in this repo, so point
+`HARMONIA_CKPT_PATH` at it if it's not at the default
+(`/work/gerstung/RFD3-adj-ckpt/epoch-0670_localattn.ckpt`).
+
 ## Running inference
 
 Enable the adapters you need in the model config
