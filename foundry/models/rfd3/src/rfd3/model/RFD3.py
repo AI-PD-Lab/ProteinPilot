@@ -16,6 +16,29 @@ from foundry.utils.ddp import RankedLogger
 ranked_logger = RankedLogger(__name__, rank_zero_only=True)
 
 
+
+def _cfg_is_noop(f: dict, f_ref: dict) -> bool:
+    """True when stripping produced an input identical to the conditional one.
+
+    Guards against paying for a second forward pass whose guidance delta is
+    provably zero. Compares only keys present in either dict; a key dropped by
+    strip_f counts as a difference.
+    """
+    keys = set(f) | set(f_ref)
+    for k in keys:
+        a, b = f.get(k), f_ref.get(k)
+        if (a is None) != (b is None):
+            return False
+        if a is None:
+            continue
+        if isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor):
+            if a.shape != b.shape or not torch.equal(a, b):
+                return False
+        elif a is not b and a != b:
+            return False
+    return True
+
+
 class RFD3(nn.Module):
     """
     Simplified model for generation
@@ -90,7 +113,18 @@ class RFD3(nn.Module):
             if self.use_classifier_free_guidance:
                 f_ref = strip_f(input["f"], self.cfg_features)
                 f_ref = apply_cfg_defaults(f_ref, self.cfg_features)
-                ref_initializer_outputs = self.token_initializer(f_ref)
+                # If nothing in cfg_features was actually conditioned, the reference
+                # input is identical to the conditional one, so the guidance delta
+                # is exactly zero -- and the extra forward pass per step is pure
+                # waste (roughly 2x inference cost for no effect). This is the
+                # normal case for unconditional generation, and now also for a spec
+                # with no ss_file/adj_file/adj_pairs, since FeaturizeSSADJ omits
+                # those keys entirely rather than emitting an all-masked tensor.
+                if _cfg_is_noop(input["f"], f_ref):
+                    f_ref = None
+                    ref_initializer_outputs = None
+                else:
+                    ref_initializer_outputs = self.token_initializer(f_ref)
             else:
                 f_ref = None
                 ref_initializer_outputs = None

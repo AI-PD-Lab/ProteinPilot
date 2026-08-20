@@ -55,6 +55,51 @@ from foundry.utils.ddp import RankedLogger  # noqa
 ranked_logger = RankedLogger(__name__, rank_zero_only=True)
 
 
+
+
+def _token_backbone_indices(atom_array) -> tuple["np.ndarray", "np.ndarray"]:
+    """Per-token (N, CA, C) atom indices plus a validity flag.
+
+    Returns (idx, valid, cb_idx, has_cb):
+      idx    (I, 3) atom indices of N/CA/C per token
+      valid  (I,)   True where all three exist (virtual CB is reconstructible)
+      cb_idx (I,)   atom index of the REAL CB where present, else token start
+      has_cb (I,)   True where a real CB atom exists
+
+    RFD3 is all-atom and predicts CB directly, so the loss should score the real
+    predicted CB. Glycine has none (and RFD1 synthesises one), which is what
+    `valid` + the N/CA/C indices are for. Tokens that are not standard protein
+    residues get everything False and indices pointing at the token start, so
+    downstream gathers stay in range and the caller falls back to C-alpha.
+    """
+    starts = get_token_starts(atom_array, add_exclusive_stop=True)
+    names = atom_array.atom_name
+    n_tok = len(starts) - 1
+    idx = np.zeros((n_tok, 3), dtype=np.int64)
+    valid = np.zeros(n_tok, dtype=bool)
+    cb_idx = np.zeros(n_tok, dtype=np.int64)
+    has_cb = np.zeros(n_tok, dtype=bool)
+    for t, (s0, s1) in enumerate(zip(starts[:-1], starts[1:])):
+        idx[t, :] = s0
+        cb_idx[t] = s0
+        local = names[s0:s1]
+        found = []
+        for want in ("N", "CA", "C"):
+            hit = np.flatnonzero(local == want)
+            if hit.size == 0:
+                found = []
+                break
+            found.append(s0 + int(hit[0]))
+        if found:
+            idx[t, :] = found
+            valid[t] = True
+        hit_cb = np.flatnonzero(local == "CB")
+        if hit_cb.size:
+            cb_idx[t] = s0 + int(hit_cb[0])
+            has_cb[t] = True
+    return idx, valid, cb_idx, has_cb
+
+
 class SubsampleToTypes(Transform):
     """
     Remove all types not specified as allowed_types
@@ -535,6 +580,37 @@ class AddIsXFeats(Transform):
             else:
                 _token_rep_mask = _token_rep_mask_indexed
             data["feats"]["is_ca"] = _token_rep_mask
+
+            # Per-token N/CA/C atom indices, so a loss can rebuild virtual C-beta
+            # from PREDICTED coordinates using foundry.data.ss_adj._reconstruct_cb's
+            # formula (itself RFD1's generate_Cbeta, Rosetta params). Needed because
+            # the ADJ label is defined on C-beta while X_L is indexed by token
+            # representative (= C-alpha), and real CB is absent for glycine.
+            #
+            # Built over the SAME atom ordering as _token_rep_mask above; the assert
+            # catches the indexed/unindexed concatenation reordering rather than
+            # letting it silently misalign.
+            _bb_idx, _bb_valid, _cb_idx, _has_cb = _token_backbone_indices(atom_array)
+            assert len(_bb_idx) == int(_token_rep_mask.sum()), (
+                f"token backbone index count {len(_bb_idx)} != token count "
+                f"{int(_token_rep_mask.sum())}; atom ordering assumption broken"
+            )
+            data["feats"]["token_bb_idx"] = torch.from_numpy(_bb_idx).long()
+            data["feats"]["token_bb_valid"] = torch.from_numpy(_bb_valid).bool()
+            data["feats"]["token_cb_idx"] = torch.from_numpy(_cb_idx).long()
+            data["feats"]["token_has_cb"] = torch.from_numpy(_has_cb).bool()
+
+            # Integer per-token chain index. AdjacencyContactLoss recovers SS blocks
+            # from adj-matrix row uniformity alone, which has no notion of chains --
+            # two tokens either side of a chain break with coincidentally identical
+            # rows would be merged into one block. _find_ss_blocks already splits on
+            # chain boundaries when the label is built; this lets the loss match.
+            _tok_starts = get_token_starts(atom_array)
+            _chain_ids = atom_array.chain_iid[_tok_starts]
+            _, _chain_int = np.unique(_chain_ids, return_inverse=True)
+            data["feats"]["token_chain_idx"] = torch.from_numpy(
+                _chain_int.astype(np.int64)
+            )
 
         return data
 

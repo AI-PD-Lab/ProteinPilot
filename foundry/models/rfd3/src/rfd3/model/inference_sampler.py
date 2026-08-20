@@ -331,8 +331,14 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
             ) / t_hat  # gradient of x wrt. t at x_t_hat
             d_t = c_t - t_hat
 
-            if self.use_classifier_free_guidance and (
-                self.cfg_t_max is None or c_t > self.cfg_t_max
+            # f_ref is None when RFD3._cfg_is_noop found the stripped input identical
+            # to the conditional one -- nothing is conditioned, so the guidance delta
+            # would be exactly zero. Skipping avoids a second forward pass per step;
+            # without this check we would deref None (strip_X, **ref_initializer_outputs).
+            if (
+                self.use_classifier_free_guidance
+                and f_ref is not None
+                and (self.cfg_t_max is None or c_t > self.cfg_t_max)
             ):
                 X_noisy_L_stripped = strip_X(X_noisy_L, f_ref)
 

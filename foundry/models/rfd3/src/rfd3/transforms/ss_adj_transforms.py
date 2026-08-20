@@ -14,7 +14,16 @@ Training path
 
 Inference path
   SS:  reads ss_label_conditioning annotation (integer per token, 3 = unconditioned)
-  ADJ: reads feats["adj_matrix"] if present (set by input_parsing.py); else zeros
+  ADJ: reads feats["adj_matrix"] if present (set by input_parsing.py from
+       adj_file / adj_pairs)
+
+  If the user specified nothing, the corresponding key is OMITTED rather than
+  filled with a sentinel. TokenInitializer guards with `"adj_matrix" in f`, so an
+  absent key means no adapter contribution at all -- no 0, no 1, no 2 -- and
+  RFD3._cfg_is_noop then skips the classifier-free-guidance reference pass, whose
+  delta would be exactly zero. Emitting an all-ZERO matrix (the behaviour before)
+  was actively wrong: ADJAdapter embeds state 0 with |out| ~30 vs 0 for masked, so
+  it asserted "nothing touches anything" on every pair.
 """
 
 from __future__ import annotations
@@ -82,19 +91,43 @@ class FeaturizeSSADJ(Transform):
     def __init__(
         self,
         loop_adj: bool = False,
+        typed_blocks: bool = False,
         cb_threshold: float = 6.0,
         ca_threshold_loop: float = 6.0,
         min_loop_contact_pairs: int = 3,
+        mask_loop_pairs: bool = True,
+        adj_only_negative_frac: float = 0.3,
         motif_region_mask_prob: float = 0.5,
+        cross_chain_seed_prob: float = 0.0,
+        motif_ss_only_mask_prob: float = 0.0,
     ):
         self.loop_adj = loop_adj
+        # Molecule-type-aware adjacency (ligands / nucleic acids). See
+        # foundry.data.ss_adj.DEFAULT_CONTACT_RULES.
+        self.typed_blocks = typed_blocks
         self.cb_threshold = cb_threshold
         self.ca_threshold_loop = ca_threshold_loop
         self.min_loop_contact_pairs = min_loop_contact_pairs
+        # Loop-involved pairs -> 2 (masked) rather than 0 (an ACTIVE learned
+        # 'explicitly non-adjacent' signal). RFD1 masks them; False reproduces
+        # the pre-fix 0645-0684 label semantics exactly.
+        self.mask_loop_pairs = mask_loop_pairs
+        # Fraction of true non-contact block pairs revealed as explicit 0 in
+        # ADJ-only mode. 0.0 restores the previous positives-only behaviour.
+        self.adj_only_negative_frac = adj_only_negative_frac
         # See _maybe_mask_motif_region: fraction of motif-bearing examples whose
         # motif tokens get SS/ADJ stripped, reproducing the `ss_adj_contig`
         # inference pattern (fold conditioning on the diffused region only).
         self.motif_region_mask_prob = motif_region_mask_prob
+        # Probability of SEEDING an interaction-site patch from a cross-chain
+        # (interface) contact pair when the example has one. Interchain adjacency is
+        # what binder design conditions on, and uniform seeding under-samples it
+        # because intra-chain contacting pairs are far more numerous. 0.0 restores
+        # the previous chain-blind behaviour exactly.
+        self.cross_chain_seed_prob = cross_chain_seed_prob
+        # Probability of masking ONLY the motif's SS while leaving adjacency intact --
+        # the real binder/multimer inference pattern. See _maybe_mask_motif_region.
+        self.motif_ss_only_mask_prob = motif_ss_only_mask_prob
 
     def check_input(self, data: dict[str, Any]) -> None:
         check_contains_keys(data, ["atom_array"])
@@ -123,8 +156,21 @@ class FeaturizeSSADJ(Transform):
             ss_labels = self._get_ss_training(atom_array, token_starts, I)
 
         # --- ADJ matrix [I, I] float32 ---
-        if is_inference and "adj_matrix" in feats:
-            adj_matrix = feats["adj_matrix"].float()
+        if is_inference:
+            # No adj_file / adj_pairs -> emit NOTHING. Not an all-zero matrix
+            # (which asserts "nothing touches anything" on every pair -- ADJAdapter
+            # embeds state 0 with |out| ~30 vs 0 for masked), and not even an
+            # all-masked one. TokenInitializer guards with `"adj_matrix" in f`, so
+            # an absent key means the adapter is simply never applied: no 0, no 1,
+            # no 2, no adapter contribution, and nothing for CFG to strip.
+            adj_matrix = feats["adj_matrix"].float() if "adj_matrix" in feats else None
+            # Applied on top of any adj_file, so a file can carry the fold and
+            # adj_pairs the interface.
+            _pairs = (data.get("specification") or {}).get("adj_pairs")
+            if _pairs:
+                adj_matrix = self._apply_adj_pairs(
+                    atom_array, token_starts, I, _pairs, adj_matrix
+                )
         else:
             adj_matrix = self._compute_adj(atom_array, token_starts, ss_labels.numpy())
 
@@ -133,10 +179,88 @@ class FeaturizeSSADJ(Transform):
             ss_labels, adj_matrix = self._apply_cfg_dropout(
                 ss_labels, adj_matrix, atom_array, token_starts, feats
             )
+            feats["ss_labels"] = ss_labels
+            feats["adj_matrix"] = adj_matrix
+            return data
 
-        feats["ss_labels"] = ss_labels
-        feats["adj_matrix"] = adj_matrix
+        # Inference: only publish what the user actually asked for.
+        if ss_labels is not None and not bool((ss_labels == _SS_MASKED).all()):
+            feats["ss_labels"] = ss_labels
+        else:
+            feats.pop("ss_labels", None)
+        if adj_matrix is not None:
+            feats["adj_matrix"] = adj_matrix
+        else:
+            feats.pop("adj_matrix", None)
         return data
+
+
+    # ------------------------------------------------------------------
+    # adj_pairs (inference)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_adj_pairs(
+        atom_array: AtomArray,
+        token_starts: np.ndarray,
+        I: int,
+        pairs: list,
+        adj_matrix: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Resolve `adj_pairs` selections against the FINAL token layout.
+
+        Runs here rather than in input_parsing because token identity is not
+        settled until after AtomizeByCCDName (one token per ligand ATOM) and
+        PadTokensWithVirtualAtoms. Resolving early produced a residue-sized matrix
+        (61) against an atomised model input (76) for a 16-atom biotin.
+
+        A ligand therefore resolves to all of its atom tokens, i.e. contact means
+        "close to any atom of the entity". That matches the training label, where
+        _segment_blocks_typed groups a ligand's atom tokens into ONE block.
+        """
+        from rfd3.inference.parsing import InputSelection
+
+        if adj_matrix is None:
+            adj_matrix = torch.full((I, I), 2, dtype=torch.float32)
+        for entry in pairs:
+            if "!:" in entry:
+                lhs, rhs = entry.split("!:", 1)
+                value = 0.0
+            elif ":" in entry:
+                lhs, rhs = entry.split(":", 1)
+                value = 1.0
+            else:
+                raise ValueError(
+                    f"adj_pairs entry {entry!r} must contain ':' (contact) or "
+                    f"'!:' (non-contact), e.g. 'A20-35 : B10-25'."
+                )
+            idxs = []
+            for side, raw in (("left", lhs), ("right", rhs)):
+                sel = raw.strip()
+                if not sel:
+                    raise ValueError(
+                        f"adj_pairs entry {entry!r} has an empty {side} selection."
+                    )
+                m = InputSelection.from_any(
+                    sel, atom_array=atom_array
+                ).get_mask()[token_starts]
+                if not m.any():
+                    raise ValueError(
+                        f"adj_pairs selection {sel!r} (in {entry!r}) matched no "
+                        f"final tokens."
+                    )
+                idxs.append(np.where(m)[0])
+            a, b = idxs
+            if np.intersect1d(a, b).size:
+                raise ValueError(
+                    f"adj_pairs entry {entry!r} selects overlapping regions; a "
+                    f"block cannot be adjacent to itself."
+                )
+            ta, tb = torch.from_numpy(a), torch.from_numpy(b)
+            adj_matrix[ta[:, None], tb[None, :]] = value
+            adj_matrix[tb[:, None], ta[None, :]] = value
+        adj_matrix.fill_diagonal_(0.0)
+        return adj_matrix
 
     # ------------------------------------------------------------------
     # SS helpers
@@ -162,6 +286,24 @@ class FeaturizeSSADJ(Transform):
         ss = np.full(I, _SS_LOOP, dtype=np.int64)
         ss[helix_tok] = _SS_HELIX
         ss[sheet_tok] = _SS_STRAND
+
+        # Non-protein tokens must not inherit the SS_LOOP fill: calling a ligand
+        # atom or a nucleotide a "loop" is false, and it routes them through the
+        # protein loop contact rule. Mask them instead -- the model already
+        # receives is_dna / is_rna / is_ligand separately, so it can tell "SS not
+        # applicable" from "SS dropped by CFG".
+        try:
+            from atomworks.enums import ChainType
+
+            ctype = np.asarray(atom_array.chain_type)[token_starts]
+            non_protein = ~np.isin(
+                ctype,
+                [int(ChainType.POLYPEPTIDE_L), int(ChainType.POLYPEPTIDE_D)],
+            )
+            ss[non_protein] = _SS_MASKED
+        except AttributeError:
+            pass
+
         return torch.tensor(ss, dtype=torch.long)
 
     # ------------------------------------------------------------------
@@ -181,9 +323,11 @@ class FeaturizeSSADJ(Transform):
             token_starts,
             ss_labels_np.astype(np.float32),
             loop_adj=self.loop_adj,
+            typed_blocks=self.typed_blocks,
             cb_threshold=self.cb_threshold,
             ca_threshold_loop=self.ca_threshold_loop,
             min_loop_contact_pairs=self.min_loop_contact_pairs,
+            mask_loop_pairs=self.mask_loop_pairs,
         )
         return torch.from_numpy(adj)
 
@@ -218,7 +362,10 @@ class FeaturizeSSADJ(Transform):
 
     @staticmethod
     def _select_connected_pairs(
-        contact_pairs: list[tuple[np.ndarray, np.ndarray]], n_keep: int
+        contact_pairs: list[tuple[np.ndarray, np.ndarray]],
+        n_keep: int,
+        seed_candidates: list[int] | None = None,
+        always_include: list[int] | None = None,
     ) -> list[int]:
         """Select n_keep contact-pair indices biased toward a connected subgraph.
 
@@ -234,14 +381,39 @@ class FeaturizeSSADJ(Transform):
         if n_keep >= n_total:
             return list(range(n_total))
 
+        # Pairs that must never be dropped. Per-pair survival is roughly uniform, but
+        # the pairs are NOT equally valuable: a complex has many intra-chain contact
+        # pairs and typically one interface. Losing an intra-chain pair costs a
+        # detail; losing the interface makes the example teach nothing about binding,
+        # which is the task we are trying to learn. So the interface is pinned rather
+        # than left to the same lottery as a dispensable internal contact.
+        forced = [i for i in (always_include or []) if 0 <= i < n_total]
+        if forced and len(forced) >= n_keep:
+            return forced[:max(n_keep, 1)]
+
         def block_key(b: np.ndarray) -> tuple[int, int]:
             return (int(b[0]), int(b[-1]))
 
         remaining = list(range(n_total))
-        first = int(np.random.choice(remaining))
-        selected = [first]
-        remaining.remove(first)
-        involved = {block_key(b) for b in contact_pairs[first]}
+        # Seeding matters more than it looks: the selection GROWS a connected
+        # subgraph outward from `first`, so whatever seeds it is guaranteed to be in
+        # the revealed patch. Seeding from cross-chain pairs is therefore the
+        # difference between "the interface is usually revealed" and "the interface
+        # is revealed only when uniform sampling happens to land on it" -- and in a
+        # real complex intra-chain contacting pairs outnumber inter-chain ones
+        # several-fold, so uniform seeding mostly reveals internal fold instead.
+        if forced:
+            selected = list(forced)
+            for i in forced:
+                if i in remaining:
+                    remaining.remove(i)
+            involved = {block_key(b) for i in forced for b in contact_pairs[i]}
+        else:
+            pool = [i for i in (seed_candidates or []) if i in remaining] or remaining
+            first = int(np.random.choice(pool))
+            selected = [first]
+            remaining.remove(first)
+            involved = {block_key(b) for b in contact_pairs[first]}
 
         while len(selected) < n_keep and remaining:
             candidates = [
@@ -268,6 +440,7 @@ class FeaturizeSSADJ(Transform):
         ss_labels: torch.Tensor,
         chain_ids: np.ndarray | None = None,
         max_contacts: int = 3,
+        negative_frac: float = 0.0,
     ) -> torch.Tensor:
         """Keep a few positive SS-block contacts and mask all other pairs with 2.
 
@@ -296,7 +469,26 @@ class FeaturizeSSADJ(Transform):
         # counts. 0.8 avoids that coincidence without regressing any other n.
         effective_cap = max(max_contacts, math.ceil(0.8 * len(contact_pairs)))
         n_keep = int(np.random.randint(1, min(effective_cap, len(contact_pairs)) + 1))
-        selected = self._select_connected_pairs(contact_pairs, n_keep)
+        # Same interface pinning as interaction-site mode. This path (ADJ-only) was
+        # entirely chain-blind, so a sparse reveal on a binder complex usually
+        # described the target's internal fold and said nothing about the interface.
+        cross_idxs: list[int] = []
+        if chain_ids is not None:
+            for pi, (bi, bj) in enumerate(contact_pairs):
+                try:
+                    if chain_ids[bi[0]] != chain_ids[bj[0]]:
+                        cross_idxs.append(pi)
+                except (IndexError, TypeError):
+                    continue
+        keep_cross = bool(cross_idxs) and np.random.random() < getattr(
+            self, "cross_chain_seed_prob", 0.0
+        )
+        selected = self._select_connected_pairs(
+            contact_pairs,
+            max(n_keep, len(cross_idxs) if keep_cross else 0),
+            seed_candidates=cross_idxs if keep_cross else None,
+            always_include=cross_idxs if keep_cross else None,
+        )
         for pair_idx in selected:
             first, second = contact_pairs[int(pair_idx)]
             first_t = torch.from_numpy(first).to(adj_matrix.device)
@@ -307,6 +499,34 @@ class FeaturizeSSADJ(Transform):
             sparse[second_t[:, None], first_t[None, :]] = adj_matrix[
                 second_t[:, None], first_t[None, :]
             ]
+
+        # Reveal a subset of true NON-contacts as explicit 0.
+        #
+        # Without this, ADJ-only never contains a single explicit non-adjacency:
+        # the matrix is stamped all-2 and only contact rectangles are copied back.
+        # ADJ-only is the mode closest to how a binder is actually driven
+        # (adjacency, no SS), and the `*_strict_no` benchmark cases evaluate
+        # exactly the pattern "these touch, those must NOT" -- which the model has
+        # otherwise never seen. Only a SUBSET is revealed, mirroring how positives
+        # are sampled, so this does not bias toward dispersion. Pairs that are
+        # masked upstream (loops, ligands, nucleic acids without typed_blocks)
+        # never appear here, because only literal 0 rectangles qualify.
+        if negative_frac > 0.0 and len(blocks) > 1:
+            non_pairs = []
+            for bi in range(len(blocks)):
+                for bj in range(bi + 1, len(blocks)):
+                    b1, b2 = blocks[bi], blocks[bj]
+                    if np.all(adj_np[np.ix_(b1, b2)] == 0):
+                        non_pairs.append((b1, b2))
+            if non_pairs:
+                n_neg = int(np.random.binomial(len(non_pairs), min(1.0, negative_frac)))
+                if n_neg:
+                    for k in np.random.choice(len(non_pairs), size=n_neg, replace=False):
+                        b1, b2 = non_pairs[int(k)]
+                        t1 = torch.from_numpy(b1).to(adj_matrix.device)
+                        t2 = torch.from_numpy(b2).to(adj_matrix.device)
+                        sparse[t1[:, None], t2[None, :]] = 0
+                        sparse[t2[:, None], t1[None, :]] = 0
         return sparse
 
     def _sample_interaction_site_partial(
@@ -355,7 +575,27 @@ class FeaturizeSSADJ(Transform):
             n_patches = int(np.random.randint(2, n_max + 1))
         n_patches = max(1, min(n_patches, n_max))
 
-        selected_idxs = self._select_connected_pairs(contact_pairs, n_patches)
+        # Cross-chain (interface) contact pairs, identified by the two blocks living
+        # in different chains. These are the PPI/binder-design interface patches.
+        cross_idxs: list[int] = []
+        if chain_ids is not None:
+            for pi, (bi, bj) in enumerate(contact_pairs):
+                try:
+                    if chain_ids[bi[0]] != chain_ids[bj[0]]:
+                        cross_idxs.append(pi)
+                except (IndexError, TypeError):
+                    continue
+        # Prefer an interface seed most of the time when one exists. Not always:
+        # intra-chain fold conditioning on a multi-chain example is also a real
+        # inference pattern, and de novo internal folds are the one thing already
+        # working -- starving them would trade one failure for another.
+        keep_cross = bool(cross_idxs) and np.random.random() < self.cross_chain_seed_prob
+        selected_idxs = self._select_connected_pairs(
+            contact_pairs,
+            max(n_patches, len(cross_idxs) if keep_cross else 0),
+            seed_candidates=cross_idxs if keep_cross else None,
+            always_include=cross_idxs if keep_cross else None,
+        )
 
         exposed_set: set[int] = set()
         for idx in selected_idxs:
@@ -472,10 +712,20 @@ class FeaturizeSSADJ(Transform):
         elif draw < ss_only_end:
             adj_matrix = torch.full_like(adj_matrix, 2)
         elif draw < adj_only_end:
-            if np.random.random() < 0.7:
+            # Three inference patterns exist for "adjacency without SS":
+            #   sparse contacts (+ optional explicit negatives), the COMPLETE
+            #   matrix (RFD1 make_secstruc_adj.py output with SS masked), and
+            #   nothing at all. Previously only the first and last were trained,
+            #   so a user handing us a full RFD1 matrix without an ss_file was
+            #   driving an untrained regime.
+            r = np.random.random()
+            if r < 0.50:
                 adj_matrix = self._sample_sparse_contacts(
-                    adj_matrix, ss_labels, chain_ids
+                    adj_matrix, ss_labels, chain_ids,
+                    negative_frac=self.adj_only_negative_frac,
                 )
+            elif r < 0.70:
+                pass  # complete adjacency, SS masked
             else:
                 adj_matrix = torch.full_like(adj_matrix, 2)
             ss_labels = torch.full((I,), _SS_MASKED, dtype=torch.long)
@@ -520,7 +770,7 @@ class FeaturizeSSADJ(Transform):
         covers motif and diffused tokens alike -- is what the unmasked path already
         trains. Pure de novo examples have no motif tokens and are untouched.
         """
-        if self.motif_region_mask_prob <= 0.0:
+        if self.motif_region_mask_prob <= 0.0 and self.motif_ss_only_mask_prob <= 0.0:
             return ss_labels, adj_matrix
         if "is_motif_token" not in atom_array.get_annotation_categories():
             return ss_labels, adj_matrix
@@ -533,10 +783,35 @@ class FeaturizeSSADJ(Transform):
         # condition -- skip both degenerate cases.
         if not is_motif.any() or is_motif.all():
             return ss_labels, adj_matrix
-        if np.random.random() >= self.motif_region_mask_prob:
+        draw = np.random.random()
+        motif_idx = torch.from_numpy(np.nonzero(is_motif)[0])
+
+        # --- SS-ONLY motif mask: the actual binder-design inference pattern --------
+        # What a real binder call supplies is: the TARGET's secondary structure masked
+        # (you are not specifying the target's fold -- it is given as coordinates),
+        # the BINDER's secondary structure specified, and the cross-chain adjacency
+        # SPECIFIED (that is the whole instruction: "this part of the binder must
+        # contact that part of the target").
+        #
+        # No CFG mode produced that. The only path that masked the target's SS
+        # (below) masked the target's ADJACENCY in the same breath, killing exactly
+        # the cross-chain labels the call is built around; and the only path that
+        # keeps adjacency with masked SS (ADJ-only) masks the BINDER's SS too. So the
+        # combination the user actually sends at inference was never in training.
+        #
+        # This branch produces it: motif SS -> 3, adjacency left entirely intact.
+        # It matters most for multimers, where hotspots are useless (there is no
+        # target to point at) and cross-chain adjacency is the ONLY way to express
+        # the topology.
+        if draw < self.motif_ss_only_mask_prob:
+            ss_labels = ss_labels.clone()
+            ss_labels[motif_idx] = _SS_MASKED
             return ss_labels, adj_matrix
 
-        motif_idx = torch.from_numpy(np.nonzero(is_motif)[0])
+        # --- full motif mask: the `ss_adj_contig` pattern (fold on diffused only) ---
+        if draw >= self.motif_ss_only_mask_prob + self.motif_region_mask_prob:
+            return ss_labels, adj_matrix
+
         ss_labels = ss_labels.clone()
         adj_matrix = adj_matrix.clone()
         ss_labels[motif_idx] = _SS_MASKED

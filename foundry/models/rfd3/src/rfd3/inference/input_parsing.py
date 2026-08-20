@@ -355,6 +355,37 @@ class DesignInputSpecification(BaseModel):
             "values 0=non-contact, 1=contact, 2=masked/unspecified; symmetric, with no diagonal contacts."
         ),
     )
+    adj_pairs: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Explicit adjacency between named regions, resolved against the "
+            "fully-assembled output the same way `ss_adj_contig` is. Each entry is "
+            "'<selection> : <selection>' for MUST-CONTACT or "
+            "'<selection> !: <selection>' for MUST-NOT-CONTACT, e.g.\n"
+            "    - 'A20-35  : B10-25'   # binder helix contacts this target patch\n"
+            "    - 'A60-75 !: B40-60'   # and must stay off that one\n"
+            "Motivation: an adj_file is indexed positionally over final tokens, so "
+            "which rows are 'the binder' and which are 'the target' is convention "
+            "only -- reordering the contig silently misaligns the whole matrix, and "
+            "nobody hand-authors explicit non-contacts into a 456x456 tensor. This "
+            "names regions by chain+residue instead, so a binder spec can say which "
+            "designed blocks touch which motif chain. Motif chains are the ones "
+            "pulled from `input` via `contig` and held fixed by `select_fixed_atoms`; "
+            "this only specifies adjacency TO them, it does not move them.\n"
+            "Composes with adj_file: pairs are applied on top, so a file can supply "
+            "the fold and adj_pairs the interface. Everything unnamed stays masked (2).\n"
+            "\n"
+            "WARNING -- selections use FINAL chain names, not the input PDB's. The "
+            "assembled output relabels chains in contig order (A, B, C, ...). For "
+            "contig '288-288,/0,D1-42,/0,B1-42,/0,I1-42,/0,G1-42' the mapping is: "
+            "A = the designed 288-mer, B = input chain D, C = input chain B, "
+            "D = input chain I, E = input chain G. Note input 'B' becomes final 'C' "
+            "while a DIFFERENT input chain (D) becomes final 'B' -- so writing "
+            "'B1-42' meaning the input's chain B silently selects the wrong chain "
+            "instead of erroring. Check the assembled chain order before writing "
+            "pairs. (`ss_adj_contig` resolves the same way.)"
+        ),
+    )
     ss_adj_contig: Optional[str] = Field(
         None,
         description=(
@@ -1247,6 +1278,16 @@ class DesignInputSpecification(BaseModel):
             else:
                 adj_matrix = _validate_adj_tensor(adj_matrix, n_tokens, self.adj_file)
             data.setdefault("feats", {})["adj_matrix"] = torch.from_numpy(adj_matrix)
+
+        # NOTE: adj_pairs is deliberately NOT resolved here. Selections are carried
+        # through in `specification` and resolved in FeaturizeSSADJ instead, because
+        # token identity is not final at this point: AtomizeByCCDName splits every
+        # ligand into one token PER ATOM and PadTokensWithVirtualAtoms adds more,
+        # both AFTER input parsing. Resolving here produced a matrix sized to
+        # residues (61) against a model expecting atomised tokens (76) for a
+        # 16-atom biotin. ss_adj_contig / adj_file below have the same latent issue
+        # for any ligand-containing system; they have simply never been used with one.
+
 
         # ... Wrap up with additional features
         if "extra" not in spec_dict:

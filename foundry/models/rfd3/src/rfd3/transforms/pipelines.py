@@ -364,6 +364,20 @@ def build_atom14_base_pipeline_(
     # SS/ADJ adapter conditioning
     ss_adj_enabled: bool = False,
     ss_adj_loop_adj: bool = False,
+    # Molecule-type-aware adjacency: ligands and nucleic acids get their own block
+    # segmentation (ligand = entity, NA = helical turns spanning both strands) and
+    # heavy-atom contact cutoffs, instead of inheriting the protein loop rule.
+    ss_adj_typed_blocks: bool = False,
+    # Fraction of motif-bearing examples whose motif tokens have SS/ADJ stripped.
+    # 0.5 deletes the binder<->target adjacency signal in half of exactly the
+    # examples that teach binder design.
+    ss_adj_motif_region_mask_prob: float = 0.5,
+    ss_adj_cross_chain_seed_prob: float = 0.0,
+    ss_adj_motif_ss_only_mask_prob: float = 0.0,
+    ss_adj_cb_threshold: float = 6.0,
+    ss_adj_ca_threshold_loop: float = 6.0,
+    ss_adj_min_loop_contact_pairs: int = 3,
+    ss_adj_mask_loop_pairs: bool = True,
     reject_short_multichain_local_tokens: bool = False,
     **_,  # dump additional kwargs (e.g. msa stuff)
 ):
@@ -514,7 +528,19 @@ def build_atom14_base_pipeline_(
         #     trainable parameter at all -> "element 0 of tensors does not require grad"
         #   * full-model DDP phases: the adapter params received no gradient ->
         #     "Expected to have finished reduction in the prior iteration"
-        FeaturizeSSADJ(loop_adj=ss_adj_loop_adj) if ss_adj_enabled else Identity(),
+        FeaturizeSSADJ(
+            loop_adj=ss_adj_loop_adj,
+            typed_blocks=ss_adj_typed_blocks,
+            cb_threshold=ss_adj_cb_threshold,
+            ca_threshold_loop=ss_adj_ca_threshold_loop,
+            min_loop_contact_pairs=ss_adj_min_loop_contact_pairs,
+            mask_loop_pairs=ss_adj_mask_loop_pairs,
+            motif_region_mask_prob=ss_adj_motif_region_mask_prob,
+            cross_chain_seed_prob=ss_adj_cross_chain_seed_prob,
+            motif_ss_only_mask_prob=ss_adj_motif_ss_only_mask_prob,
+        )
+        if ss_adj_enabled
+        else Identity(),
         # ... AF3 token level encoding with sequence masking
         EncodeAF3TokenLevelFeatures(
             sequence_encoding=af3_sequence_encoding, encode_residues_to=GAP

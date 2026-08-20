@@ -378,14 +378,124 @@ class AdjacencyContactLoss(nn.Module):
         weight: float,
         threshold: float = 6.0,
         softness: float = 2.0,
+        min_distance: float = 4.5,
+        negative_weight: float = 0.0,
+        negative_threshold: float = 8.0,
+        negative_margin: float = 1.0,
+        use_cb: bool = False,
+        detach_motif: bool = False,
+        steric_weight: float = 0.0,
+        steric_floor: float = 3.5,
+        steric_margin: float = 0.5,
     ):
         super().__init__()
         self.weight = weight
         self.threshold = threshold
         self.softness = softness  # Angstrom scale of the sigmoid transition
+        # Repulsive arm for block pairs marked as EXPLICIT non-contact (adj == 0).
+        #
+        # Without it this loss is purely attractive: only `adj == 1` pairs are
+        # scored, so nothing in the objective keeps explicitly-non-adjacent blocks
+        # apart, and the attractive term biases the model toward association in
+        # general. Masked pairs (2) stay indeterminate and are never scored here --
+        # only values the featurizer actually revealed as 0.
+        #
+        # Self-balancing despite 0-pairs vastly outnumbering 1-pairs: the penalty is
+        # flat-zero once a pair is beyond `negative_threshold`, so only violators
+        # contribute gradient. Left at 0.0 the loss is bit-identical to before.
+        self.negative_weight = negative_weight
+        # Ceiling on the separation we ask for: beyond this a pair is plainly
+        # non-adjacent and we stop caring. Never exceeded even if the native
+        # distance is much larger.
+        self.negative_threshold = negative_threshold
+        # Slack below the native distance before a 0-pair counts as collapsed.
+        self.negative_margin = negative_margin
+        # Score C-beta (RFD1's virtual CB, rebuilt from predicted N/CA/C) instead of
+        # C-alpha, matching the atom the ADJ label is actually defined on. Off by
+        # default so existing checkpoints/configs are unaffected.
+        self.use_cb = use_cb
+        # Freeze fixed-motif coordinates inside this loss (see forward).
+        self.detach_motif = detach_motif
+        # --- steric arm ---------------------------------------------------------
+        # A MASKED adjacency pair (2) means "I do not care whether these are in
+        # contact". It does NOT mean the designed chain may occupy the motif's
+        # volume. Adjacency state and steric exclusion are orthogonal: the former is
+        # a design intent, the latter is physics that holds unconditionally.
+        #
+        # The attractive well's `min_distance` floor only guards pairs revealed as 1,
+        # and the repulsive arm only guards pairs revealed as 0, so a masked
+        # designed<->motif pair is currently unconstrained by THIS loss. The
+        # diffusion loss against native coordinates does teach clash-free geometry
+        # (no native structure self-intersects), which is why this is a hardening
+        # term rather than the sole defence -- but at inference the motif is pinned
+        # at coordinates the scaffold never saw during its own trajectory, and that
+        # is where interpenetration actually shows up.
+        #
+        # Scored over ALL designed x fixed-motif token pairs regardless of adjacency
+        # state. Left at 0.0 the loss is bit-identical to before.
+        self.steric_weight = steric_weight
+        # Clash threshold on the contact atom (CB, or CA where no CB exists). Real
+        # contacts sit at 4.5-6 A, so a 3.5 A floor never competes with a legitimate
+        # interface -- it only forbids overlap.
+        self.steric_floor = steric_floor
+        # Slack below the NATIVE separation before a pair counts as interpenetrating.
+        self.steric_margin = steric_margin
+        # Lower wall of the flat-bottomed well. Paired beta-strands sit at CA-CA
+        # ~4.8-5.5 A and the CA-clash metric flags <3.5 A, so 4.5 leaves the
+        # physically correct range unpenalised while stopping the loss from
+        # compressing contacts into clash territory. Set equal to `threshold` to
+        # recover the old one-sided (monotonic, always-attracting) behaviour.
+        self.min_distance = min_distance
 
     @staticmethod
-    def _blocks_from_adjacency_rows(adj: torch.Tensor) -> list[torch.Tensor]:
+    def _virtual_cb(X_L: torch.Tensor, bb_idx: torch.Tensor) -> torch.Tensor:
+        """Rebuild virtual C-beta from predicted N/CA/C, differentiably.
+
+        Byte-identical constants to foundry.data.ss_adj._reconstruct_cb, which is
+        itself RFD1's generate_Cbeta (the Rosetta-parameter variant). Using the
+        same construction on both sides makes the loss score exactly the quantity
+        the ADJ label is defined on, including for glycine -- real CB does not
+        exist there, and `central_atom="CB"` silently falls back to CA.
+        """
+        n = X_L[:, bb_idx[:, 0], :]
+        ca = X_L[:, bb_idx[:, 1], :]
+        c = X_L[:, bb_idx[:, 2], :]
+        b = ca - n
+        c_vec = c - ca
+        a = torch.cross(b, c_vec, dim=-1)
+        return -0.57910144 * a + 0.5689693 * b - 0.5441217 * c_vec + ca
+
+    def _contact_coords(self, X_L, f, X_ca):
+        """Per-token contact atom, in preference order.
+
+        1. the REAL predicted C-beta -- RFD3 is all-atom, CB is an actual
+           predicted-and-supervised atom, so score it directly and let gradient
+           reach the atom that determines packing;
+        2. virtual C-beta rebuilt from N/CA/C, for glycine (no CB exists, and
+           RFD1 synthesises one there too);
+        3. C-alpha, for anything that is not a standard protein residue.
+        """
+        if not self.use_cb:
+            return X_ca
+        bb_idx = f.get("token_bb_idx")
+        bb_valid = f.get("token_bb_valid")
+        cb_idx = f.get("token_cb_idx")
+        has_cb = f.get("token_has_cb")
+        if bb_idx is None or bb_valid is None:
+            return X_ca
+        out = X_ca
+        if bb_valid.any():
+            out = torch.where(
+                bb_valid[None, :, None], self._virtual_cb(X_L, bb_idx), out
+            )
+        if cb_idx is not None and has_cb is not None and has_cb.any():
+            out = torch.where(has_cb[None, :, None], X_L[:, cb_idx, :], out)
+        return out
+
+    @staticmethod
+    def _blocks_from_adjacency_rows(
+        adj: torch.Tensor, chain_idx: torch.Tensor | None = None
+    ) -> list[torch.Tensor]:
         """Recover contiguous token groups from adj_matrix's block-uniform rows.
 
         Every ground-truth fill (ss_adj.py) and every CFG-dropout mask/copy
@@ -395,6 +505,11 @@ class AdjacencyContactLoss(nn.Module):
         """
         I = adj.shape[0]
         same_as_prev = (adj[1:] == adj[:-1]).all(dim=-1)  # (I-1,) bool
+        if chain_idx is not None:
+            # Never merge across a chain break, mirroring _find_ss_blocks on the
+            # label side. Without this a multi-chain binder example can fuse a
+            # target block onto a designed block whenever their rows coincide.
+            same_as_prev = same_as_prev & (chain_idx[1:] == chain_idx[:-1])
         blocks = []
         start = 0
         for i in range(1, I):
@@ -423,16 +538,42 @@ class AdjacencyContactLoss(nn.Module):
             f"{I} implied by f['is_ca']"
         )
 
-        blocks = self._blocks_from_adjacency_rows(adj)
+        blocks = self._blocks_from_adjacency_rows(adj, f.get("token_chain_idx"))
+        # Block pairs in which BOTH sides are fully-fixed motif are unlearnable when
+        # detach_motif is on: every coordinate feeding them is detached, so they
+        # contribute a constant with zero gradient. They are NOT free, though -- the
+        # per-example loss is a MEAN, so each one enlarges the denominator and shrinks
+        # the gradient on the pairs that can actually be learned. In binder design the
+        # target's own internal fold supplies most of the conditioned contacts (a
+        # 200-residue target easily gives 10-20x more target-internal pairs than
+        # cross-interface ones), so the cross-interface signal -- the entire point of
+        # the task -- was being averaged down by an order of magnitude.
+        _fixed_tok_early = f.get("is_motif_token_with_fully_fixed_coord")
+        _fixed_np = _fixed_tok_early.bool() if _fixed_tok_early is not None else None
+
+        def _both_fixed(b1, b2) -> bool:
+            if _fixed_np is None or not self.detach_motif:
+                return False
+            return bool(_fixed_np[b1].all()) and bool(_fixed_np[b2].all())
+
         block_pairs = []
+        neg_block_pairs = []
         for bi in range(len(blocks)):
             b1 = blocks[bi]
             for bj in range(bi + 1, len(blocks)):
                 b2 = blocks[bj]
-                if bool((adj[b1][:, b2] == 1).any()):
+                if _both_fixed(b1, b2):
+                    continue
+                rect = adj[b1][:, b2]
+                if bool((rect == 1).any()):
                     block_pairs.append((b1, b2))
+                elif self.negative_weight > 0.0 and bool((rect == 0).all()):
+                    # Explicit non-contact only. `.all()` (not `.any()`) so a
+                    # rectangle holding any masked (2) entry is left indeterminate
+                    # rather than being treated as a revealed negative.
+                    neg_block_pairs.append((b1, b2))
 
-        if not block_pairs:
+        if not block_pairs and not neg_block_pairs:
             zero = X_L.new_zeros(())
             return self.weight * zero, {"adjacency_contact_loss": zero.detach()}
 
@@ -440,12 +581,31 @@ class AdjacencyContactLoss(nn.Module):
         if crd_mask_L.dim() == 1:
             crd_mask_L = crd_mask_L.unsqueeze(0).expand(D, -1)
         valid_ca = crd_mask_L[:, is_ca].bool()  # (D, I)
+        # Score C-beta (label's atom) when enabled; falls back to C-alpha per
+        # token where no full N/CA/C backbone exists.
+        X_ct = self._contact_coords(X_L, f, X_ca)
+        # Hoisted: the steric arm needs this mask whether or not detach_motif is on.
+        fixed_tok = f.get("is_motif_token_with_fully_fixed_coord")
+        if self.detach_motif:
+            # For a designed<->fixed-target pair, gradient should move the binder
+            # to the target, not drag the pinned target toward the binder.
+            if fixed_tok is not None:
+                # Token-level (length I): built by apply_token_wise, which reduces
+                # over each token via apply_segment_wise. Guard anyway rather than
+                # broadcasting a wrong-length mask into silence.
+                assert fixed_tok.shape[-1] == X_ct.shape[1], (
+                    f"is_motif_token_with_fully_fixed_coord has length "
+                    f"{fixed_tok.shape[-1]}, expected {X_ct.shape[1]} tokens"
+                )
+                X_ct = torch.where(
+                    fixed_tok.bool()[None, :, None], X_ct.detach(), X_ct
+                )
 
         per_bp_loss = []
         per_bp_valid = []
         for b1, b2 in block_pairs:
-            xa = X_ca[:, b1, :]  # (D, |b1|, 3)
-            xb = X_ca[:, b2, :]  # (D, |b2|, 3)
+            xa = X_ct[:, b1, :]  # (D, |b1|, 3)
+            xb = X_ct[:, b2, :]  # (D, |b2|, 3)
             dist = torch.linalg.norm(xa.unsqueeze(2) - xb.unsqueeze(1), dim=-1)  # (D, |b1|, |b2|)
 
             va = valid_ca[:, b1]  # (D, |b1|)
@@ -459,16 +619,154 @@ class AdjacencyContactLoss(nn.Module):
             min_dist = dist_masked.flatten(1).min(dim=-1).values  # (D,)
             any_valid = valid.flatten(1).any(dim=-1)  # (D,)
 
-            contact_score = torch.sigmoid((self.threshold - min_dist) / self.softness)
-            per_bp_loss.append((1.0 - contact_score) * any_valid)
+            # Flat-bottomed well: zero penalty anywhere in [min_distance, threshold].
+            # The previous form, 1 - sigmoid((threshold - d) / softness), is monotonic
+            # in d with its optimum at d -> 0, so it kept pulling conditioned blocks
+            # together long after the contact was physically satisfied (loss 0.50 at
+            # 6.0 A, 0.35 at 4.8, 0.25 at 3.8, 0.12 at 2.0). Measured consequence on
+            # epoch-0670: mean minimum cross-block distance 3.81 A, against the
+            # ~4.8-5.5 A that paired beta-strands actually adopt -- i.e. contacts
+            # compressed a full Angstrom into near-clash range, which is where the
+            # chain breaks and CA clashes came from (epoch-0645, trained without this
+            # loss, has 0.00 of both).
+            #
+            # Both arms are squashed through 2*sigmoid(x)-1, which is 0 at x=0 and
+            # saturates at 1, preserving the bounded-gradient property the sigmoid was
+            # chosen for: at high t the x0-estimate is meaningless, and an unbounded
+            # hinge there would inject a huge gradient the network cannot act on.
+            too_far = torch.clamp(min_dist - self.threshold, min=0.0)
+            too_close = torch.clamp(self.min_distance - min_dist, min=0.0)
+            penalty = (2.0 * torch.sigmoid(too_far / self.softness) - 1.0) + (
+                2.0 * torch.sigmoid(too_close / self.softness) - 1.0
+            )
+            per_bp_loss.append(penalty * any_valid)
             per_bp_valid.append(any_valid)
 
-        losses_stacked = torch.stack(per_bp_loss, dim=0)  # (n_bp, D)
-        valid_stacked = torch.stack(per_bp_valid, dim=0).float()  # (n_bp, D)
-
-        denom = valid_stacked.sum(dim=0).clamp(min=1)  # (D,)
-        per_example_loss = (losses_stacked * valid_stacked).sum(dim=0) / denom  # (D,)
+        if per_bp_loss:
+            losses_stacked = torch.stack(per_bp_loss, dim=0)  # (n_bp, D)
+            valid_stacked = torch.stack(per_bp_valid, dim=0).float()  # (n_bp, D)
+            denom = valid_stacked.sum(dim=0).clamp(min=1)  # (D,)
+            per_example_loss = (losses_stacked * valid_stacked).sum(dim=0) / denom
+        else:
+            # Negative-only example (revealed 0s but no revealed contacts). Keep the
+            # per-example vector defined so the low_t/high_t split below still works.
+            per_example_loss = X_L.new_zeros(D)
         loss = per_example_loss.mean()
+
+        # --- repulsive arm: explicit non-contacts must stay non-adjacent ---
+        # Mirror image of the attractive well, one-sided: zero once the pair is
+        # beyond `negative_threshold`, so satisfied pairs exert no force and only
+        # violators produce gradient. Averaged over VIOLATING pairs rather than all
+        # negative pairs, so the term's magnitude does not shrink as the structure
+        # grows (negative pairs scale ~quadratically with block count, and dividing
+        # by all of them would silently anneal the penalty away on large systems).
+        neg_loss = X_L.new_zeros(())
+        n_violating = 0.0
+        if neg_block_pairs:
+            # NATIVE-MATCHED separation floor. A fixed threshold is unusable here:
+            # with `loop_adj=False` (the pn_unit / interface datasets), every
+            # loop-involved block pair is skipped by _adj_blocks_from_coords and so
+            # is left at 0 -- i.e. labelled "explicit non-contact" even when the loop
+            # is physically packed against a helix. Loops are ~half of all residues,
+            # so a flat "push all 0-pairs past 6-8 A" would try to peel most of the
+            # protein apart from itself.
+            #
+            # Instead require only that a 0-pair stays as far apart as it natively
+            # is, capped at `negative_threshold` (beyond that we do not care -- the
+            # pair is plainly non-adjacent). A loop natively touching at 4 A gets a
+            # floor of ~3 A (anti-clash only); a pair natively 15 A apart gets the
+            # full 8 A floor. This also sidesteps the CA/CB question: we compare a
+            # predicted CA distance against the native CA distance, like with like,
+            # rather than against a CB-derived threshold.
+            X_gt_L = torch.nan_to_num(loss_input["X_gt_L_in_input_frame"])
+            if X_gt_L.dim() == 2:
+                X_gt_L = X_gt_L.unsqueeze(0)
+            X_gt_ca = X_gt_L[..., is_ca, :].expand(D, -1, -1)
+            X_gt_ct = self._contact_coords(X_gt_L.expand(D, -1, -1), f, X_gt_ca)
+            neg_penalties = []
+            neg_valids = []
+            for b1, b2 in neg_block_pairs:
+                xa = X_ct[:, b1, :]
+                xb = X_ct[:, b2, :]
+                dist = torch.linalg.norm(xa.unsqueeze(2) - xb.unsqueeze(1), dim=-1)
+                va = valid_ca[:, b1]
+                vb = valid_ca[:, b2]
+                valid = va.unsqueeze(2) & vb.unsqueeze(1)
+                dist_masked = dist.masked_fill(~valid, 1.0e6)
+                min_dist = dist_masked.flatten(1).min(dim=-1).values  # (D,)
+                any_valid = valid.flatten(1).any(dim=-1)
+
+                with torch.no_grad():
+                    ga = X_gt_ct[:, b1, :]
+                    gb = X_gt_ct[:, b2, :]
+                    gdist = torch.linalg.norm(ga.unsqueeze(2) - gb.unsqueeze(1), dim=-1)
+                    gmin = gdist.masked_fill(~valid, 1.0e6).flatten(1).min(dim=-1).values
+                    floor = torch.clamp(gmin - self.negative_margin, min=0.0)
+                    floor = torch.minimum(
+                        floor, torch.full_like(floor, self.negative_threshold)
+                    )
+
+                too_near = torch.clamp(floor - min_dist, min=0.0)
+                neg_penalties.append(
+                    (2.0 * torch.sigmoid(too_near / self.softness) - 1.0) * any_valid
+                )
+                neg_valids.append(any_valid & (too_near > 0))
+            neg_stacked = torch.stack(neg_penalties, dim=0)  # (n_neg, D)
+            active = torch.stack(neg_valids, dim=0).float()  # (n_neg, D)
+            neg_denom = active.sum(dim=0).clamp(min=1)
+            neg_loss = ((neg_stacked * active).sum(dim=0) / neg_denom).mean()
+            n_violating = float(active.sum().item())
+
+        # --- steric arm: the designed chain may not occupy the motif's volume ----
+        # Independent of adjacency state, INCLUDING masked (2) pairs. "Masked" means
+        # the adjacency is unspecified, not that overlap is permitted.
+        #
+        # Native-matched, like the repulsive arm and for the same reason: a designed
+        # residue that natively packs against the motif at 3.8 A must not be pushed
+        # to 3.5 A+margin. The floor is min(steric_floor, native - margin), so we
+        # never demand MORE separation than the native structure itself has, and the
+        # term can only ever forbid going closer than nature does.
+        steric_loss = X_L.new_zeros(())
+        n_clashing = 0.0
+        if self.steric_weight > 0.0 and fixed_tok is not None:
+            fixed_m = fixed_tok.bool()
+            des_m = ~fixed_m
+            if bool(fixed_m.any()) and bool(des_m.any()):
+                X_gt_s = torch.nan_to_num(loss_input["X_gt_L_in_input_frame"])
+                if X_gt_s.dim() == 2:
+                    X_gt_s = X_gt_s.unsqueeze(0)
+                X_gt_s = X_gt_s.expand(D, -1, -1)
+                X_gt_ct_s = self._contact_coords(X_gt_s, f, X_gt_s[..., is_ca, :])
+
+                xd = X_ct[:, des_m, :]                       # (D, n_des, 3)
+                xf = X_ct[:, fixed_m, :].detach()            # pinned: never dragged
+                d_sf = torch.cdist(xd, xf)                   # (D, n_des, n_fix)
+                vd = valid_ca[:, des_m]
+                vf = valid_ca[:, fixed_m]
+                valid_sf = vd.unsqueeze(2) & vf.unsqueeze(1)
+
+                with torch.no_grad():
+                    g_sf = torch.cdist(
+                        X_gt_ct_s[:, des_m, :], X_gt_ct_s[:, fixed_m, :]
+                    )
+                    floor_sf = torch.minimum(
+                        torch.clamp(g_sf - self.steric_margin, min=0.0),
+                        torch.full_like(g_sf, self.steric_floor),
+                    )
+
+                overlap = torch.clamp(floor_sf - d_sf, min=0.0) * valid_sf
+                clashing = overlap > 0
+                n_clashing = float(clashing.sum().item())
+                # Mean over CLASHING pairs only, so the term does not anneal away as
+                # the system grows (designed x fixed pairs scale quadratically).
+                steric_loss = (overlap.pow(2).sum() / max(n_clashing, 1.0))
+
+        # `weight` is applied once to the whole term at return, so express the
+        # repulsive arm relative to it rather than scaling it twice.
+        if self.negative_weight > 0.0:
+            loss = loss + (self.negative_weight / max(self.weight, 1e-8)) * neg_loss
+        if self.steric_weight > 0.0:
+            loss = loss + (self.steric_weight / max(self.weight, 1e-8)) * steric_loss
 
         with torch.no_grad():
             t = network_input["t"]
@@ -486,6 +784,10 @@ class AdjacencyContactLoss(nn.Module):
             "adjacency_contact_loss_high_t": high_t_loss,
             "adjacency_n_conditioned_block_pairs": torch.tensor(
                 float(len(block_pairs)), device=X_L.device
+            ),
+            "adjacency_steric_loss": steric_loss.detach(),
+            "adjacency_n_clashing_pairs": torch.tensor(
+                n_clashing, device=X_L.device
             ),
         }
         return self.weight * loss, loss_dict

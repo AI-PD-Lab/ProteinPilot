@@ -174,9 +174,25 @@ class IslandCondition(TrainingCondition):
 
 
 class PPICondition(TrainingCondition):
-    """Get condition indicating what is motif and what is to be diffused for protein-protein interaction training."""
+    """Get condition indicating what is motif and what is to be diffused for protein-protein interaction training.
+
+    `allow_na_target` additionally admits protein<->nucleic-acid interfaces, with the
+    NUCLEIC ACID as the fixed target and the protein as the designed binder. Without
+    it the condition required BOTH query pn_units to be protein, so "design a protein
+    against a fixed DNA/RNA target" -- a real inference task -- was never trained in
+    the binder shape at all. That is why protein-NA non-contact conditioning never
+    improved across three checkpoints (violation 0.812 -> 0.875 from epoch 684 to
+    704) while protein-protein did: the label was present, the task shape was not.
+
+    The binder is always chosen from the PROTEIN units: we design protein, never
+    nucleic acid, so an NA unit may only ever be the target.
+    """
 
     name = "ppi"
+
+    def __init__(self, *args, allow_na_target: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.allow_na_target = allow_na_target
 
     def is_valid_for_example(self, data):
         # Extract relevant data
@@ -202,6 +218,13 @@ class PPICondition(TrainingCondition):
 
         elif not all(
             [pn_unit in protein_pn_unit_iids for pn_unit in self.query_pn_unit_iids]
+        ) and not (
+            # Mixed interface: admissible only when NA targets are enabled AND at
+            # least one side is protein to serve as the binder. A pair with no
+            # protein at all (NA<->NA, NA<->ligand) has nothing to design and is
+            # still rejected.
+            self.allow_na_target
+            and any(pn in protein_pn_unit_iids for pn in self.query_pn_unit_iids)
         ):
             return False
 
@@ -209,7 +232,12 @@ class PPICondition(TrainingCondition):
             # Randomly select one of the two query pn_unit_iids to be the binder
             # NOTE: Could also do this based on if only one will work uncropped, but since that
             # strategy will not always be applied, enforcing it here would bias the training data.
-            binder_pn_unit = np.random.choice(self.query_pn_unit_iids)
+            # Restrict the draw to PROTEIN units: on a mixed protein/NA interface the
+            # nucleic acid may only be the fixed target, never the designed binder.
+            binder_candidates = [
+                pn for pn in self.query_pn_unit_iids if pn in protein_pn_unit_iids
+            ]
+            binder_pn_unit = np.random.choice(binder_candidates)
             data["binder_pn_unit"] = binder_pn_unit
             atom_array.set_annotation(
                 "is_binder_pn_unit", atom_array.pn_unit_iid == binder_pn_unit

@@ -212,8 +212,16 @@ class BaseInferenceEngine:
         """
         # Construct pipeline
         ranked_logger.info("Building Transform pipeline...")
-        if getattr(cfg.datasets, "val", None) is not None:
-            first_val_dataset_key, first_val_dataset = next(iter(cfg.datasets.val.items()))
+        # First NON-NULL val entry. A null entry is legal in a training config -- a
+        # disabled sub-dataset is left as a key whose value is None -- but taking it
+        # here raises AttributeError on `.dataset`, and the failure is silent in the
+        # worst way: the engine produces ZERO designs while SLURM still reports the
+        # job COMPLETED. Both epoch-0694 and epoch-0700 shipped with `val.loop: null`
+        # sitting first, which cost a full benchmark run before it was noticed.
+        val_cfg = getattr(cfg.datasets, "val", None) or {}
+        first_val = next(((k, v) for k, v in val_cfg.items() if v is not None), None)
+        if first_val is not None:
+            first_val_dataset_key, first_val_dataset = first_val
             ranked_logger.info(
                 f"Using settings from validation dataset: {first_val_dataset_key}."
             )

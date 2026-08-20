@@ -1,8 +1,15 @@
-# Checkpoints — published to Hugging Face, never committed here
-*.ckpt
-*.pt
-*.pth
-checkpoints/*.ckpt
+# Data — never commit (100GB+)
+Data_Mirrors/
+
+# Model checkpoints
+foundry/base_models/
+**/*.ckpt
+**/*.pt
+
+# Training logs and outputs
+logs/
+foundry/logs/
+**/outputs/
 
 # Environment files (contain local paths/secrets)
 **/.env
@@ -17,15 +24,6 @@ __pycache__/
 dist/
 build/
 .eggs/
-.ruff_cache/
-.pytest_cache/
-.benchmarks/
-
-# Training/inference outputs
-logs/
-outputs/
-**/outputs/
-wandb/
 
 # Editor / OS
 .DS_Store
@@ -36,7 +34,25 @@ wandb/
 # Jupyter
 .ipynb_checkpoints/
 
-# Slurm
-slurm-*.out
+# Ruff / pre-commit
+.ruff_cache/
+.pre-commit-cache/
+
+# NFS lock files
+**.nfs**
+
+# Large/generated training data
+pipeline/ring/manifest.tsv
+ring_training_local/data/
+ring_training_local/pipeline_assembly_fixed/manifest.tsv
+
+# Logs
+*.log
+logs/
+log/
 *.out
 *.err
+slurm-*.out
+
+# wandb local run detritus from login-node metric replay
+wandb/

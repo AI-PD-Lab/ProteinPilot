@@ -37,3 +37,17 @@ ss_adj_loop_metadata: null
 ss_adj_loop_val_metadata: null
 ss_adj_pn_units_train_metadata: /hnvme/workspace/v181bb10-triad_data/data/metadata/splits/pn_units_df_train.parquet
 ss_adj_interfaces_train_metadata: /hnvme/workspace/v181bb10-triad_data/data/metadata/splits/interfaces_df_train.parquet
+
+# Adjacency-focused validation splits, stratified by interface type so ligand and
+# nucleic-acid conditioning can be scored separately from protein-protein.
+# Built from interfaces_df_val.parquet (one row per cluster, capped) by
+# docs/motif_adjacency_wiring.md section 16.
+ss_adj_val_protein_protein_metadata: /hnvme/workspace/v181bb10-triad_data/data/metadata/splits/ss_adj_val/interfaces_val_protein_protein.parquet
+ss_adj_val_protein_ligand_metadata: /hnvme/workspace/v181bb10-triad_data/data/metadata/splits/ss_adj_val/interfaces_val_protein_ligand.parquet
+ss_adj_val_protein_na_metadata: /hnvme/workspace/v181bb10-triad_data/data/metadata/splits/ss_adj_val/interfaces_val_protein_na.parquet
+
+# Antibody-containing protein-protein interfaces, identified by Ig FR4 framework
+# motif (WGxGT / FGxGT) on a 95-140aa domain in the pn_units sequences, then
+# cross-referenced by pdb_id. 141,639 rows / 1,918 clusters -- only 0.55% of all
+# clusters, which is their true weight under cluster-based sampling.
+ss_adj_antibody_train_metadata: /hnvme/workspace/v181bb10-triad_data/data/metadata/splits/ss_adj_antibody/interfaces_train_antibody.parquet

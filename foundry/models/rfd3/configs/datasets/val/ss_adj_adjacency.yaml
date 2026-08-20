@@ -1,0 +1,150 @@
+# Adjacency-focused validation, stratified BY INTERFACE TYPE.
+#
+# Pooled validation is dominated by protein-protein and would hide whether ligand
+# or nucleic-acid conditioning works at all -- which is the question phase 6 exists
+# to answer. Pairs with the per-pair-kind metrics in
+# analyze_ss_adj_conditioning.py.
+#
+# Splits built from interfaces_df_val.parquet (one row per cluster, then capped at
+# 400) so the three subsets are comparable in size despite protein-NA being ~8x
+# rarer in the raw rows.
+#
+# NOTE on structure: each entry MUST inherit rfd3_train_interface. Writing the
+# entries by hand without it produced a spec with no `_target_` and no
+# `dataset_parser` -- hydra still instantiated *something*, the dataset name was
+# even logged correctly, but it yielded 2 examples instead of 400 and validation
+# crashed on its first batch. Inherit the base, override only data + transform.
+
+defaults:
+  # Merge at the ENTRY, not at .dataset: the base file's root already contains a
+  # `dataset:` key, so merging at `@x.dataset` shifts everything one level down and
+  # the override lands at x.dataset.dataset.dataset -- hydra then silently uses the
+  # base's default parquet (interfaces_df.parquet) instead of ours.
+  - /datasets/train/pdb/rfd3_train_interface@protein_protein
+  - /datasets/train/pdb/rfd3_train_interface@protein_ligand
+  - /datasets/train/pdb/rfd3_train_interface@protein_na
+  - _self_
+
+protein_protein:
+  dataset:
+    # This deployment has no unpacked PDB tree; the experiment overrides the train
+    # sub-datasets to the tar-backed parser and val must match, or the base's
+    # InterfacesDFParser is constructed without a base_dir and fails.
+    dataset_parser:
+      _target_: atomworks.ml.datasets.parsers.TarBackedInterfacesDFParser
+      tar_path: ${paths.data.pdb_mirror_tar_path}
+      index_path: ${paths.data.pdb_mirror_tar_index_path}
+    dataset:
+      name: ss_adj_val_protein_protein
+      data: ${paths.data.ss_adj_val_protein_protein_metadata}
+      # Inheriting the train base also inherits its AF3 date cutoff
+      # ("deposition_date < '2021-09-30'"), which removes EVERY row of a held-out
+      # split -- that is what crashed validation on its first batch. Same filter
+      # list, opposite side of the boundary. The excluded-ligands regexes are kept
+      # deliberately: without them the protein-ligand subset fills with
+      # crystallisation additives instead of real ligands.
+      filters:
+      # filters common across all PDB datasets
+      - "deposition_date >= '2021-09-30'"   # held-out side of the AF3 split
+      - "resolution < 9.0"
+      - "num_polymer_pn_units <= 300"
+      - "cluster.notnull()"
+      # interface specific filters
+      - "~(pn_unit_1_non_polymer_res_names.notnull() and pn_unit_1_non_polymer_res_names.str.contains('${resolve_import:atomworks.constants,AF3_EXCLUDED_LIGANDS_REGEX}', regex=True))"
+      - "~(pn_unit_2_non_polymer_res_names.notnull() and pn_unit_2_non_polymer_res_names.str.contains('${resolve_import:atomworks.constants,AF3_EXCLUDED_LIGANDS_REGEX}', regex=True))"
+      - "is_inter_molecule"
+    transform:
+      return_atom_array: true
+      reject_short_multichain_local_tokens: false
+      ss_adj_enabled: true
+      ss_adj_mask_loop_pairs: true
+      ss_adj_typed_blocks: ${datasets.ss_adj_typed_blocks}
+      # ppi kept on: binder-shaped examples are the point of this subset.
+      train_conditions:
+        unconditional: {frequency: 1.0}
+        ppi: {frequency: 1.0}
+        island: {frequency: 0.0}
+        tipatom: {frequency: 0.0}
+        sequence_design: {frequency: 0.0}
+
+protein_ligand:
+  dataset:
+    # This deployment has no unpacked PDB tree; the experiment overrides the train
+    # sub-datasets to the tar-backed parser and val must match, or the base's
+    # InterfacesDFParser is constructed without a base_dir and fails.
+    dataset_parser:
+      _target_: atomworks.ml.datasets.parsers.TarBackedInterfacesDFParser
+      tar_path: ${paths.data.pdb_mirror_tar_path}
+      index_path: ${paths.data.pdb_mirror_tar_index_path}
+    dataset:
+      name: ss_adj_val_protein_ligand
+      data: ${paths.data.ss_adj_val_protein_ligand_metadata}
+      # Inheriting the train base also inherits its AF3 date cutoff
+      # ("deposition_date < '2021-09-30'"), which removes EVERY row of a held-out
+      # split -- that is what crashed validation on its first batch. Same filter
+      # list, opposite side of the boundary. The excluded-ligands regexes are kept
+      # deliberately: without them the protein-ligand subset fills with
+      # crystallisation additives instead of real ligands.
+      filters:
+      # filters common across all PDB datasets
+      - "deposition_date >= '2021-09-30'"   # held-out side of the AF3 split
+      - "resolution < 9.0"
+      - "num_polymer_pn_units <= 300"
+      - "cluster.notnull()"
+      # interface specific filters
+      - "~(pn_unit_1_non_polymer_res_names.notnull() and pn_unit_1_non_polymer_res_names.str.contains('${resolve_import:atomworks.constants,AF3_EXCLUDED_LIGANDS_REGEX}', regex=True))"
+      - "~(pn_unit_2_non_polymer_res_names.notnull() and pn_unit_2_non_polymer_res_names.str.contains('${resolve_import:atomworks.constants,AF3_EXCLUDED_LIGANDS_REGEX}', regex=True))"
+      - "is_inter_molecule"
+    transform:
+      return_atom_array: true
+      reject_short_multichain_local_tokens: false
+      ss_adj_enabled: true
+      ss_adj_mask_loop_pairs: true
+      ss_adj_typed_blocks: ${datasets.ss_adj_typed_blocks}
+      train_conditions:
+        unconditional: {frequency: 1.0}
+        island: {frequency: 0.0}
+        tipatom: {frequency: 0.0}
+        ppi: {frequency: 0.0}
+        sequence_design: {frequency: 0.0}
+
+protein_na:
+  dataset:
+    # This deployment has no unpacked PDB tree; the experiment overrides the train
+    # sub-datasets to the tar-backed parser and val must match, or the base's
+    # InterfacesDFParser is constructed without a base_dir and fails.
+    dataset_parser:
+      _target_: atomworks.ml.datasets.parsers.TarBackedInterfacesDFParser
+      tar_path: ${paths.data.pdb_mirror_tar_path}
+      index_path: ${paths.data.pdb_mirror_tar_index_path}
+    dataset:
+      name: ss_adj_val_protein_na
+      data: ${paths.data.ss_adj_val_protein_na_metadata}
+      # Inheriting the train base also inherits its AF3 date cutoff
+      # ("deposition_date < '2021-09-30'"), which removes EVERY row of a held-out
+      # split -- that is what crashed validation on its first batch. Same filter
+      # list, opposite side of the boundary. The excluded-ligands regexes are kept
+      # deliberately: without them the protein-ligand subset fills with
+      # crystallisation additives instead of real ligands.
+      filters:
+      # filters common across all PDB datasets
+      - "deposition_date >= '2021-09-30'"   # held-out side of the AF3 split
+      - "resolution < 9.0"
+      - "num_polymer_pn_units <= 300"
+      - "cluster.notnull()"
+      # interface specific filters
+      - "~(pn_unit_1_non_polymer_res_names.notnull() and pn_unit_1_non_polymer_res_names.str.contains('${resolve_import:atomworks.constants,AF3_EXCLUDED_LIGANDS_REGEX}', regex=True))"
+      - "~(pn_unit_2_non_polymer_res_names.notnull() and pn_unit_2_non_polymer_res_names.str.contains('${resolve_import:atomworks.constants,AF3_EXCLUDED_LIGANDS_REGEX}', regex=True))"
+      - "is_inter_molecule"
+    transform:
+      return_atom_array: true
+      reject_short_multichain_local_tokens: false
+      ss_adj_enabled: true
+      ss_adj_mask_loop_pairs: true
+      ss_adj_typed_blocks: ${datasets.ss_adj_typed_blocks}
+      train_conditions:
+        unconditional: {frequency: 1.0}
+        island: {frequency: 0.0}
+        tipatom: {frequency: 0.0}
+        ppi: {frequency: 0.0}
+        sequence_design: {frequency: 0.0}

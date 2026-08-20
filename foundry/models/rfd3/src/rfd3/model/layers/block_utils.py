@@ -227,11 +227,22 @@ def create_attention_indices(
     ]  # [n_atoms, n_atoms]
     k_actual = min(n_attn_keys, L)
 
-    # For symmetric structures, ensure inter-chain interactions are included
+    # Reserve guaranteed inter-chain attention keys for ANY multi-chain structure.
+    #
+    # The gate used to be `> 3` unique chains, with the comment "for symmetric
+    # structures" -- so a DIMER or a binder+target complex (2 chains) fell through to
+    # the chain-blind path. That path is the problem: build_index_mask AND-s the
+    # guaranteed mask with `same_chain`, so cross-chain pairs are excluded from the
+    # guaranteed keys entirely and appear only if the remaining budget happens to be
+    # filled by spatial proximity. Early in diffusion the binder is noise, far from
+    # the target, so no cross-chain keys are selected and the model cannot see the
+    # target while it folds. That is exactly the observed failure: each chain's
+    # internal geometry comes out clean (intra-chain keys are guaranteed) while the
+    # specified interface never forms.
     chain_ids = f["asym_id"][tok_idx] if "asym_id" in f else None
     if (
-        chain_ids is not None and len(torch.unique(chain_ids)) > 3
-    ):  # Multi-chain structure
+        chain_ids is not None and len(torch.unique(chain_ids)) > 1
+    ):  # Multi-chain structure (dimer included)
         # Reserve 25% of attention keys for inter-chain interactions
         k_inter_chain = max(32, k_actual // 4)  # At least 32 inter-chain keys
         k_intra_chain = k_actual - k_inter_chain
@@ -285,39 +296,39 @@ def get_sparse_attention_indices_with_inter_chain(
         tok_idx, D_LL, n_seq_neighbours, k_intra, chain_id, base_mask
     )  # [B, L, k_intra]
 
-    # Get inter-chain indices for clash avoidance
+    # Get inter-chain indices for clash avoidance.
+    #
+    # FIXED: the previous implementation looped `for c in unique_chains` and then used
+    # `c` -- a chain ID *value* -- as the ATOM ROW index (`inter_indices[b, c, ...]`,
+    # `D_LL[b, c, ...]`, `base_mask[c, :]`). Only the first few rows (those whose index
+    # happened to equal a chain id) ever received inter-chain keys; every other atom
+    # kept the torch.zeros initialisation and therefore attended to atom 0, k_inter
+    # times over -- duplicated, meaningless keys. `query_chain = chain_id[c]` was wrong
+    # for the same reason, so the "other chain" mask was usually computed against
+    # chain 0 regardless of which chain was being processed.
+    #
+    # Correct formulation is per-ATOM, not per-chain: for every atom, take the k_inter
+    # nearest atoms that live in a DIFFERENT chain. Vectorised, so it also drops the
+    # python loop over chains.
     inter_indices = torch.zeros(B, L, k_inter, dtype=torch.long, device=D_LL.device)
-    unique_chains = torch.unique(chain_id)
+    k_inter_eff = min(k_inter, L)
+    cross_allowed = chain_id.unsqueeze(-1) != chain_id.unsqueeze(-2)  # (L, L)
+    if base_mask is not None:
+        cross_allowed = cross_allowed & base_mask
+    n_avail = cross_allowed.sum(dim=-1)  # (L,)
+    self_idx = torch.arange(L, device=D_LL.device).unsqueeze(-1).expand(-1, k_inter)
     for b in range(B):
-        for c in unique_chains:
-            query_chain = chain_id[c]
-
-            # Find atoms from different chains
-            other_chain_mask = (chain_id != query_chain) & base_mask[c, :]
-            other_chain_atoms = torch.where(other_chain_mask)[0]
-
-            if len(other_chain_atoms) > 0:
-                # Get distances to other chains
-                distances_to_other = D_LL[b, c, other_chain_atoms]
-
-                # Select k_inter closest atoms from other chains
-                n_select = min(k_inter, len(other_chain_atoms))
-                _, closest_idx = torch.topk(distances_to_other, n_select, largest=False)
-                selected_atoms = other_chain_atoms[closest_idx]
-
-                # Fill inter-chain indices
-                inter_indices[b, c, :n_select] = selected_atoms
-                # Pad with random atoms if needed
-                if n_select < k_inter:
-                    padding = torch.randint(
-                        0, L, (k_inter - n_select,), device=D_LL.device
-                    )
-                    inter_indices[b, c, n_select:] = padding
-            else:
-                # No other chains found, fill with random indices
-                inter_indices[b, c, :] = torch.randint(
-                    0, L, (k_inter,), device=D_LL.device
-                )
+        d = D_LL[b].masked_fill(~cross_allowed, float("inf"))
+        _, idx = torch.topk(d, k_inter_eff, dim=-1, largest=False)  # (L, k_inter_eff)
+        if k_inter_eff < k_inter:
+            idx = torch.cat(
+                [idx, idx[:, -1:].expand(-1, k_inter - k_inter_eff)], dim=-1
+            )
+        # Atoms with no cross-chain partner at all (single-chain crop, or everything
+        # masked out): point at self rather than at a spurious atom 0. Self keys are
+        # already present in the intra set, so these are inert duplicates rather than
+        # misleading attention targets.
+        inter_indices[b] = torch.where(n_avail.unsqueeze(-1) > 0, idx, self_idx)
 
     # Combine intra and inter chain indices
     combined_indices = torch.cat(
