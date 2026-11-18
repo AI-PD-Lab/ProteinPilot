@@ -1,6 +1,6 @@
 # Checkpoints
 
-Hosted in the Hugging Face bucket [`AI-PD/Harmonia`](https://huggingface.co/buckets/AI-PD/Harmonia). Download with
+Hosted in the Hugging Face model repo [`AI-PD/Harmonia`](https://huggingface.co/AI-PD/Harmonia). Download with
 `python checkpoints/download.py --model rfd3|rfd4|all`.
 
 | File | Model | What it is |

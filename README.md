@@ -20,7 +20,7 @@ conditioning inputs and run script for Harmonia-RFD3, Harmonia-RFD4 or RFdiffusi
 
 ## Checkpoints
 
-Hosted in the Hugging Face bucket [`AI-PD/Harmonia`](https://huggingface.co/buckets/AI-PD/Harmonia):
+Hosted in the Hugging Face model repo [`AI-PD/Harmonia`](https://huggingface.co/AI-PD/Harmonia):
 
 ```bash
 pip install huggingface_hub
@@ -28,7 +28,7 @@ python checkpoints/download.py --model rfd3     # checkpoints/Harmonia-RFD3.ckpt
 python checkpoints/download.py --model rfd4     # checkpoints/Harmonia-RFD4/{config.json,model.safetensors}
 ```
 
-Log in first (`huggingface-cli login` or `HF_TOKEN`) while the bucket is private. See [`checkpoints/README.md`](checkpoints/README.md)
+Log in first (`huggingface-cli login` or `HF_TOKEN`) while the repo is private. See [`checkpoints/README.md`](checkpoints/README.md)
 for what each file is.
 
 ## Inputs

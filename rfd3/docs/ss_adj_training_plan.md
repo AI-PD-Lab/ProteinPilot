@@ -22,7 +22,7 @@ monotonic steric normalisation with a NaN guard. See the header of
 
 ## Reproducing stage 10
 
-You need epoch 0694 (`epoch-0694_phase6.ckpt`, in the same Hugging Face bucket), a PDB mirror with the metadata parquets, and the AtomWorks patch.
+You need epoch 0694 (`epoch-0694_phase6.ckpt`, the intermediate checkpoint it starts from; not part of the release download, available from the authors), a PDB mirror with the metadata parquets, and the AtomWorks patch.
 
 ```bash
 # 1. data: DSSP + block adjacency tables (scripts/data), PDB mirror as one tar + index
