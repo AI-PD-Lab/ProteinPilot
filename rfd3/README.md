@@ -88,4 +88,4 @@ scheduler directives and the training data are not part of this repository. Earl
 
 ## License
 
-BSD 3-Clause, see the root [`LICENSE`](../LICENSE) and [`foundry/LICENSE.md`](foundry/LICENSE.md).
+Original HARMONIA parts: PolyForm Noncommercial 1.0.0 (root [`LICENSE`](../LICENSE)); foundry-derived code: BSD 3-Clause ([`NOTICE.md`](../NOTICE.md)).

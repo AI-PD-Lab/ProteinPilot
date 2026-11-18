@@ -75,8 +75,9 @@ live on the branches `phase10`, `harmonia-v2`, `rfd4-harmonia` and `rfd4-harmoni
 
 ## License
 
-BSD 3-Clause, see [`LICENSE`](LICENSE). RFdiffusion3 / foundry source is Copyright (c) 2025 Institute for Protein Design, University of
-Washington; RFD4-Proteina is BSD 3-Clause as well. The HARMONIA conditioning code and checkpoints are an original contribution on top.
+Original HARMONIA code and the two fine-tuned checkpoints: [PolyForm Noncommercial 1.0.0](LICENSE). Code derived from RFdiffusion3 / foundry
+stays under BSD 3-Clause ([`LICENSE-BSD-3-Clause`](LICENSE-BSD-3-Clause)); RFD4-Proteina is installed separately (BSD 3-Clause). Which
+file is under which licence: [`NOTICE.md`](NOTICE.md).
 
 ## Citation
 
