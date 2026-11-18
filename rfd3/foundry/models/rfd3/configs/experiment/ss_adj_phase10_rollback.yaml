@@ -1,0 +1,219 @@
+# @package _global_
+# Phase 10: ROLLBACK to epoch-0694 with a deliberately minimal change set.
+#
+# Phases 7-9 accumulated changes that were never individually attributed, and the
+# measured outcome was worse folds at saturated recovery. This restarts from the last
+# checkpoint judged good (0694) and carries ONLY:
+#
+#   IN   loop adjacency            ss_adj_loop_adj: true
+#        larger crop               crop_size 256 -> 384 (stock RFD3 trains at 384)
+#        motif dilution fix        _both_fixed in AdjacencyContactLoss: block pairs
+#                                  with BOTH sides fully-fixed motif are skipped, so
+#                                  the designed-side gradient is not diluted (measured
+#                                  0.054 -> 0.389, ~7x)
+#        interface pinning         ss_adj_cross_chain_seed_prob 0.7 -- seeds/pins
+#                                  cross-chain pairs in the sparse reveal so a binder
+#                                  example describes its interface, not just the
+#                                  target's own fold. No-op on monomers.
+#
+# REMOVED FROM THE CODE, not merely disabled (so they cannot come back by config):
+#     (steric arm is KEPT, flat 3.5 A floor -- it guards designed<->motif overlap.
+#      The ladder that measured NA clashes 8 -> 11 compared FLOOR variants with the
+#      arm on in every rung; the TYPED floors are what did not help.)
+#   x interface-area term          improved compactness but doubled NA clashes
+#                                  (8 -> 18) and folds were still wrong on inspection
+#   x SUPER/HOTSPOT/COLDSPOT       phase 9 states, and atom-level coldspots
+#   x SS-only / partial-xchain     binder-oriented motif branches added in phase 8
+#     motif mask modes
+#   x antibody upsampling          sub-dataset removed from ss_adj_design.yaml
+#
+# ppi stays at the phase 6/7 weight (frequency 2.0, ~17.4% of conditions). Phase 8
+# raised it to 8.0 (~41%); that is reverted.
+#
+# Carried over from phase 6 unchanged: typed blocks, use_cb, negative_weight 0.5,
+# detach_motif.
+#
+# Usage: ckpt_config.path=<epoch-0694_phase6.ckpt>
+
+name: ss-adj-phase10-rollback
+tags: [ss-adj, finetune, phase5, geometry, contact-well]
+
+defaults:
+  - /trainer/loss/losses/adjacency_contact_loss@trainer.loss.adjacency_contact_loss
+  # Adjacency-focused validation, stratified by interface type. Replaces the
+  # ss_adj_loop val entry, whose metadata path resolves to null -- which is the
+  # real reason phases 3-5 never validated, beyond the run script's datasets.val=null.
+  - _self_
+
+ckpt_config:
+  _target_: foundry.utils.weights.CheckpointConfig
+  path: ???
+  reset_optimizer: true
+  weight_loading_config:
+    _target_: foundry.utils.weights.WeightLoadingConfig
+    default_policy: copy
+    fallback_policy: reinit
+  parameter_freezing_config:
+    _target_: foundry.utils.weights.ParameterFreezingConfig
+    freeze_by_default: false
+    param_policies:
+      "shadow.*": true
+
+trainer:
+  # --- phase 6: activate the implemented loss machinery -----------------------
+  loss:
+    adjacency_contact_loss:
+      # Score the atom the label is actually defined on
+      # (real predicted CB -> virtual CB for glycine -> CA).
+      use_cb: true
+      # Keep explicitly non-adjacent blocks apart. Native-matched floor, so a loop
+      # or ligand that natively touches is not shoved away.
+      negative_weight: 0.5
+      # Move the binder to the pinned target, not the target to the binder.
+      detach_motif: true
+      # Steric arm: the designed chain may not occupy the pinned motif's volume.
+      # Applies regardless of adjacency state, INCLUDING masked (2) pairs -- "masked"
+      # means the adjacency is unspecified, not that overlap is permitted.
+      #
+      # Kept at the ORIGINAL FLAT 3.5 A floor. The 0716/0718/0722 ladder that measured
+      # worse NA clashes (8 -> 11) compared FLOOR VARIANTS -- every rung had the arm
+      # switched on -- so it says the TYPED floors (NA 5.0 / ligand 4.5) did not help.
+      # It says nothing about the arm itself, which has never been tested against its
+      # own absence. 0694 was trained without it.
+      steric_weight: 0.5
+      steric_floor: 3.5
+  # max_epochs is an ABSOLUTE target epoch (matches every ss_adj_phase*.yaml's
+  # convention) -- epoch-0651.ckpt's current_epoch is 651, so this must be
+  # 651 + (desired new epochs), not just the desired new epoch count.
+  max_epochs: 704  # 694 + 10
+  n_examples_per_epoch: 9600
+  # Validation DISABLED. The stratified adjacency val set works (399/289/400
+  # examples, real examples pull through) but it cost two runs to get there and is
+  # not worth further wall-clock right now. The config is left intact -- set this
+  # back to 1 to re-enable, nothing else needs changing.
+  validate_every_n_epochs: 99999
+  checkpoint_every_n_epochs: 1
+  grad_accum_steps: 1
+  find_unused_parameters: false
+
+datasets:
+  # No val group. Validation is disabled, and leaving a val entry in the config
+  # means the inference engine reads it out of the checkpoint
+  # (next(iter(cfg.datasets.val.items()))) -- a null first entry there made
+  # epoch-0694 produce ZERO designs across an entire benchmark. With no val group
+  # the engine falls back to the train transform, which is what phase 5 does.
+  val: null
+  # --- phase 6: molecule-type-aware adjacency (ligands / nucleic acids) --------
+  # One toggle; train sub-datasets and the val set both interpolate it.
+  # Stock RFD3 trains at 384; ss_adj_design.yaml has used 256 since 00ea832. The pair
+  # representation is quadratic in tokens, so this is ~2.25x the Z memory of 256 -- if
+  # it OOMs, drop diffusion_batch_size_train before reducing crop_size.
+  crop_size: 384
+  max_atoms_in_crop: 3840
+  ss_adj_typed_blocks: true
+  # Loop adjacency ON. Loop-involved block pairs become real 0/1 labels instead of
+  # masked, which roughly doubles block count and shifts the label distribution
+  # substantially -- hence its own phase rather than folding into phase 6.
+  #
+  # Safe only because the repulsive arm is native-matched: a loop that natively
+  # packs at 4 A gets a ~3 A floor, not the 8 A ceiling. Never enable loop
+  # adjacency together with a fixed-threshold repulsive term.
+  ss_adj_loop_adj: true
+  # Restore the production train_conditions mixture from
+  # configs/experiment/pretrain.yaml ("the ratios used in the preprint"),
+  # which no local stage (ss_ratio_finetune or any ss_adj_phase*) ever applied.
+  # island/tipatom are real-fixed-atom conditioning -- the training-time analog
+  # of `input`+`contig` motif-scaffolding at inference (same annotations:
+  # is_motif_token / is_motif_atom_with_fixed_coord). Unlike pretrain.yaml
+  # (which leaves ppi=0.0, treating PPI/binder-design as a separate finetune),
+  # ppi is given nonzero weight here -- our actual use case (scaffolding around
+  # a real target) is exactly the PPI/binder-design task shape, so it should be
+  # represented directly in this recovery mixture rather than deferred.
+  global_transform_args:
+    train_conditions:
+      unconditional:
+        frequency: 2.0
+      island:
+        frequency: 2.0
+      sequence_design:
+        frequency: 0.5
+      tipatom:
+        frequency: 5.0
+      ppi:
+        frequency: 2.0
+  train:
+    standard:
+      # ss_adj_design.yaml splits standard 0.93 / loop 0.07, and the antibody
+      # sub-dataset (removed for this phase) previously absorbed the remainder when
+      # the runner passes datasets.train.loop=null. With both gone the weights summed
+      # to 0.93 and dataset construction asserted "Sum of probabilities must be 1.0".
+      # standard is the only train group left here, so it takes all of it.
+      probability: 1.0
+      sub_datasets:
+        pn_unit:
+          dataset:
+            dataset_parser:
+              _target_: atomworks.ml.datasets.parsers.TarBackedPNUnitsDFParser
+              tar_path: ${paths.data.pdb_mirror_tar_path}
+              index_path: ${paths.data.pdb_mirror_tar_index_path}
+            transform:
+              # Seed/pin cross-chain pairs in the sparse reveal. Seeding was chain-blind
+              # and intra-chain contacts outnumber inter-chain ones several-fold, so an
+              # interface was revealed only when uniform sampling happened to land on
+              # it. No-op on single-chain examples.
+              ss_adj_cross_chain_seed_prob: 0.7
+        interface:
+          dataset:
+            dataset_parser:
+              _target_: atomworks.ml.datasets.parsers.TarBackedInterfacesDFParser
+              tar_path: ${paths.data.pdb_mirror_tar_path}
+              index_path: ${paths.data.pdb_mirror_tar_index_path}
+            transform:
+              ss_adj_cross_chain_seed_prob: 0.7
+
+model:
+  net:
+    token_initializer:
+      ss_adapter:
+        enabled: true
+      adj_adapter:
+        enabled: true
+    inference_sampler:
+      cfg_features:
+        - ref_atomwise_rasa
+        - active_donor
+        - active_acceptor
+        - ss_ratio
+        - ss_labels
+        - adj_matrix
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 2.0e-6
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+  lr_scheduler:
+    _target_: foundry.training.schedulers.AF3Scheduler
+    base_lr: 2.0e-6
+    warmup_steps: 250
+    decay_factor: 0.95
+    decay_steps: 6000
+
+# Validation dataloader: allow fallback retries.
+#
+# dataloader/default.yaml sets n_fallback_retries=0 for val ("Disable fallback
+# retries for validation") vs 20 for train. That is safe for the curated upstream
+# val sets, which never fail transforms. These splits are drawn from raw interface
+# rows, and a few percent hit the same benign per-example failure seen ~1.7x per
+# logged batch during training:
+#     AssertionError: Transforms failed at `ConditionalRoute -> CropSpatialLikeAF3`:
+#     No crop center found!
+# In training that example is resampled; in validation it killed a 6.5 h run.
+#
+# Tradeoff accepted knowingly: retries make the val set non-deterministic at the
+# margin (a failing example is replaced by another). Validation here is an average
+# over ~100 batches per split, so a handful of substitutions is immaterial, whereas
+# a crash costs an epoch. The deterministic alternative -- pre-filtering the splits
+# by actually running the pipeline over all 1088 examples -- costs hours of I/O.
+dataloader:
+  val:
+    n_fallback_retries: 20
