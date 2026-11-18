@@ -17,7 +17,7 @@ RFdiffusion4.
 
 ProteinPilot is a browser-based graphical interface for adjacency-conditioned protein design. You draw the topology of a protein, and ProteinPilot writes the matching conditioning inputs, contig and run script. Imported structures, fixed motifs and binder interfaces are supported.
 
-Together with ProteinPilot we release HARMONIA, adjacency-conditioned weights for RFdiffusion3 and RFdiffusion4. They recover drawn topologies more consistently than the original RFdiffusion, run faster and open up new conditioning modes such as loop contacts, ligands and nucleic acids.
+Together with ProteinPilot we release HARMONIA, adjacency-conditioned weights for RFdiffusion3 (**Harmonia-RFD3**) and RFdiffusion4 (**Harmonia-RFD4**). They recover drawn topologies more consistently than the original RFdiffusion, run faster and open up new conditioning modes such as loop contacts, ligands and nucleic acids.
 
 ProteinPilot is a single self-contained HTML file. It runs entirely in your browser, and nothing you draw or import is uploaded.
 
@@ -42,14 +42,14 @@ With ProteinPilot you draw helices, strands and loops instead, connect them and 
 
 | Engine | Model | Exported files |
 |---|---|---|
-| **RFD4** (default) | RFdiffusion4 (RFD4-Proteina, flow matching) with the HARMONIA-RFD4 adjacency checkpoint | annotated `.cif`, `.adj.npy`, `.ss.npy`, run script |
-| **RFD3** | RFdiffusion3 with the HARMONIA adjacency checkpoint | input `.json`, `ss.pt`, `adj.pt`, run script |
+| **RFD4** (default) | RFdiffusion4 (RFD4-Proteina, flow matching) with the Harmonia-RFD4 adjacency checkpoint | annotated `.cif`, `.adj.npy`, `.ss.npy`, run script |
+| **RFD3** | RFdiffusion3 with the Harmonia-RFD3 adjacency checkpoint | input `.json`, `ss.pt`, `adj.pt`, run script |
 | **RFD1** | [RFdiffusion](https://github.com/RosettaCommons/RFdiffusion), scaffold-guided mode | `_ss.pt`, `_adj.pt`, run script |
 
 All three engines use the same secondary-structure and adjacency definition (contact = any Cβ–Cβ pair within
-6 Å), so one drawing can be compared across models. The RFdiffusion3/4 adjacency code (HARMONIA) is at
-[github.com/AI-PD-Lab/HARMONIA](https://github.com/AI-PD-Lab/HARMONIA), and the HARMONIA checkpoints are at
-[huggingface.co/buckets/AI-PD/Harmonia](https://huggingface.co/buckets/AI-PD/Harmonia).
+6 Å), so one drawing can be compared across models. The RFdiffusion3/4 adjacency code (HARMONIA; `rfd3/` and `rfd4/`) is at
+[github.com/AI-PD-Lab/HARMONIA](https://github.com/AI-PD-Lab/HARMONIA), and the checkpoints `Harmonia-RFD3.ckpt` and `Harmonia-RFD4/` are at
+[huggingface.co/buckets/AI-PD/Harmonia](https://huggingface.co/buckets/AI-PD/Harmonia) (`python checkpoints/download.py` in the HARMONIA repo).
 
 ## Quick start
 

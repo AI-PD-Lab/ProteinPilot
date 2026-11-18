@@ -10002,7 +10002,7 @@ immutable/dist/immutable.es.js:
 
       <div class="pg"><div class="pl">HARMONIA checkout: $HARMONIA in the .sh</div>
         <input class="pi" id="fl-h-root" placeholder="/directory/HARMONIA" oninput="syncFlags()">
-        <div class="small-hint">The clone that holds <code>foundry/</code> and <code>checkpoints/</code>.</div></div>
+        <div class="small-hint">The clone that holds <code>rfd3/foundry/</code> (<code>foundry/</code> in older clones) and <code>checkpoints/</code>.</div></div>
 
       <div class="pg"><div class="pl">Python interpreter: the env RFD3 / AtomWorks is installed in</div>
         <input class="pi" id="fl-h-python" placeholder="/directory/envs/atomworks/bin/python3" oninput="syncFlags()"></div>
@@ -26408,7 +26408,8 @@ INPUT_JSON="$SCAFFOLD_DIR/${rfd3JsonName()}"
 OUT_DIR="${outDir}"
 ${rfd3PdbLines(g)}
 
-FOUNDRY="$HARMONIA/foundry"
+FOUNDRY="$HARMONIA/rfd3/foundry"
+[ -d "$FOUNDRY" ] || FOUNDRY="$HARMONIA/foundry"    # clones from before the rfd3/ rfd4/ layout
 
 # ── Design config ────────────────────────────────────────────────────────────
 #   Engine       : RFdiffusion3 + HARMONIA SS/ADJ conditioning${rfd3Ckpt() === RFD3_CKPT_DEFAULT ? ' (epoch-698)' : '. Checkpoint ' + rfd3Ckpt()}
