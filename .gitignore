@@ -56,3 +56,7 @@ slurm-*.out
 
 # wandb local run detritus from login-node metric replay
 wandb/
+
+# Downloaded release checkpoints
+checkpoints/Harmonia-RFD3.ckpt
+checkpoints/Harmonia-RFD4/

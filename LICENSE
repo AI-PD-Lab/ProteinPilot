@@ -1,11 +1,11 @@
 HARMONIA is built on top of RFdiffusion3 ("foundry"), Copyright (c) 2025,
-Institute for Protein Design, University of Washington, licensed under the
-BSD 3-Clause License below. The SS/ADJ and ss_ratio fold-conditioning
-additions in this repository (foundry/models/rfd3/src/rfd3/{model/layers/ss_adj_adapters.py,
+Institute for Protein Design, University of Washington, and RFD4-Proteina,
+licensed under the BSD 3-Clause License below. The SS/ADJ and ss_ratio
+fold-conditioning additions in this repository (rfd3/foundry/models/rfd3/src/rfd3/{model/layers/ss_adj_adapters.py,
 model/layers/ss_conditioning.py, transforms/ss_adj_transforms.py, ...},
-foundry/src/foundry/data/ss_adj.py, and everything under scripts/, patches/,
-and docs/) are original contributions by the HARMONIA repository owner
-(github.com/Jetzu), made available under the same terms.
+rfd3/foundry/src/foundry/data/ss_adj.py, everything under rfd3/scripts/, rfd3/patches/,
+rfd3/docs/, and the rfd4/harmonia_ext package) are original contributions by the
+HARMONIA repository owner (github.com/Jetzu), made available under the same terms.
 
 ---
 

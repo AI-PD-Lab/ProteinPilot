@@ -1,0 +1,33 @@
+# Template for training Harmonia-RFD3 on your own data. Copy, edit, and select with  "paths/data=local_ss_adj"
+# (training only; inference needs none of this). Everything can be overridden through the environment.
+#
+# The PDB mirror can be read file-by-file (set pdb_data_dir) or from ONE tar plus an offset index
+# (pdb_mirror_tar_path + pdb_mirror_tar_index_path; build the index with scripts/data/build_pdb_mirror_tar_index.py and apply
+# patches/atomworks, which adds the tar-backed parsers). With the tar reader pdb_data_dir stays null.
+
+pdb_data_dir: null
+pdb_parquet_dir: ${oc.env:HARMONIA_METADATA_DIR,/path/to/metadata/splits}
+
+pdb_mirror_tar_path: ${oc.env:HARMONIA_PDB_TAR,/path/to/pdb_mirror.tar}
+pdb_mirror_tar_index_path: ${oc.env:HARMONIA_PDB_TAR_INDEX,/path/to/pdb_mirror_tar_index.parquet}
+
+monomer_distillation_data_dir: null
+monomer_distillation_parquet_dir: null
+design_benchmark_data_dir: null
+design_model_weight_dir: null
+residue_cache_dir: null
+
+cif_cache_dir: ${oc.env:HARMONIA_CACHE_DIR,/path/to/cache}/cif_cache
+failed_examples_dir: ${oc.env:HARMONIA_CACHE_DIR,/path/to/cache}/failed_examples
+
+# No curated loop dataset / validation in the template: run with datasets.train.loop=null (as the phase-10 recipe does).
+ss_adj_loop_metadata: null
+ss_adj_loop_val_metadata: null
+ss_adj_pn_units_train_metadata: ${paths.data.pdb_parquet_dir}/pn_units_df_train.parquet
+ss_adj_interfaces_train_metadata: ${paths.data.pdb_parquet_dir}/interfaces_df_train.parquet
+
+# Optional adjacency-focused validation splits (see docs/motif_adjacency_wiring.md section 16).
+ss_adj_val_protein_protein_metadata: ${paths.data.pdb_parquet_dir}/ss_adj_val/interfaces_val_protein_protein.parquet
+ss_adj_val_protein_ligand_metadata: ${paths.data.pdb_parquet_dir}/ss_adj_val/interfaces_val_protein_ligand.parquet
+ss_adj_val_protein_na_metadata: ${paths.data.pdb_parquet_dir}/ss_adj_val/interfaces_val_protein_na.parquet
+ss_adj_antibody_train_metadata: null

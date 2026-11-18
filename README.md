@@ -1,182 +1,84 @@
 # HARMONIA
 
-Secondary-structure and block-adjacency ("SS/ADJ") fold conditioning for
-[RFdiffusion3](https://www.biorxiv.org/content/10.1101/2025.09.18.676967) —
-plus the related global `ss_ratio` conditioning knob — with a trained
-checkpoint at epoch 670.
+Adjacency-conditioned protein design for RFdiffusion3 and RFdiffusion4.
 
-This repo is a trimmed-down fork scoped to just that feature: the RFD3/
-AtomWorks source needed to run it, the adapters and transforms that add it,
-the scripts used to build training data and launch training/inference, and
-docs explaining how it works. It does **not** include RFD3's other model
-variants (rfd3na, rf3), training data, logs, or the unrelated RING project
-this work was originally developed alongside.
+HARMONIA adds two conditioning inputs to the diffusion models: a per-residue **secondary-structure** string and a **block adjacency**
+map saying which secondary-structure elements touch. You describe a fold by its topology, and the model builds the structure.
+Two models are released:
 
-The checkpoint (2.6 GB) is hosted on Hugging Face, not in this repo — see
-[Checkpoint](#checkpoint).
+| Model | Base | Checkpoint | Code |
+|---|---|---|---|
+| **Harmonia-RFD3** | [RFdiffusion3](https://www.biorxiv.org/content/10.1101/2025.09.18.676967) | `Harmonia-RFD3.ckpt` (epoch 698, 2.7 GB) | [`rfd3/`](rfd3) |
+| **Harmonia-RFD4** | [RFD4-Proteina](https://github.com/RosettaCommons/RFD4-Proteina) | `Harmonia-RFD4/` (R3, 8k steps, 1.7 GB) | [`rfd4/`](rfd4) |
 
-## What this adds to RFD3
+Both are fine-tunes of the released base models. With the conditioning left unspecified, the added inputs contribute exactly zero, so
+the models still run as the original base model.
 
-Two independent conditioning mechanisms, both trained as zero-init adapters
-on top of a pretrained RFD3 checkpoint so they're safe to warm-start from:
+**[ProteinPilot](https://ai-pd-lab.github.io/ProteinPilot/)** is the companion web app: draw a topology in the browser and download the
+conditioning inputs and run script for Harmonia-RFD3, Harmonia-RFD4 or RFdiffusion
+([source](https://github.com/AI-PD-Lab/ProteinPilot), [Hugging Face Space](https://huggingface.co/spaces/AI-PD/ProteinPilot)).
 
-- **SS/ADJ (per-residue)** — condition generation on a target secondary
-  structure string (helix/strand/loop) and/or a block adjacency matrix
-  (which secondary-structure elements pack against each other), the same
-  tensor conventions RFdiffusion1 used. See
-  [`docs/ss_adj_inference.md`](docs/ss_adj_inference.md) for the exact input
-  format, and [`docs/ss_adj_training_plan.md`](docs/ss_adj_training_plan.md)
-  for how the checkpoint was trained (data, phases, submission scripts).
+## Checkpoints
 
-- **ss_ratio (global)** — a single scalar per chain (`E / (H + E)`, i.e. the
-  helix/strand balance) that biases generation toward an overall fold
-  composition without specifying per-residue topology. See
-  [`docs/ss_ratio_conditioning.md`](docs/ss_ratio_conditioning.md) for the
-  architecture (Fourier-feature encoder, classifier-free-guidance dropout).
-
-Both are implemented as additive, zero-initialized adapters injected into
-`TokenInitializer` (`foundry/models/rfd3/src/rfd3/model/layers/`), so a
-checkpoint trained with them enabled still behaves like the base model at
-step zero and only diverges as those adapter weights are trained.
-
-## Repo layout
-
-```
-foundry/                  trimmed RFD3 + core foundry framework (needed to run it)
-  src/                     core training/inference framework
-  models/rfd3/             the RFD3 model itself — config, source, tests
-patches/atomworks/         small patch on top of public atomworks[ml] (tar-backed data loading)
-scripts/
-  data/                    build/precompute/validate SS/ADJ training data
-  training/                SLURM launchers for the SS/ADJ and ss_ratio training phases
-  inference/                generate conditioning inputs, run inference, analyze/plot results
-docs/                      SS/ADJ + ss_ratio design docs
-checkpoints/               download.py — pulls epoch-0670 from Hugging Face
-```
-
-## Setup
-
-Requires Python 3.12.
-
-```bash
-pip install "rc-foundry[rfd3]"   # or: pip install -e ./foundry[rfd3]
-pip install "atomworks[ml]>=2.1.1"
-```
-
-Apply the small AtomWorks patch (only needed if you're using tar-backed
-training data mirrors — see [`patches/atomworks/README.md`](patches/atomworks/README.md)):
-
-```bash
-ATOMWORKS_SRC=$(python -c "import atomworks, pathlib; print(pathlib.Path(atomworks.__file__).parent)")
-cp -r patches/atomworks/src/atomworks/* "$ATOMWORKS_SRC/"
-```
-
-## Checkpoint
-
-The epoch-670 checkpoint is published on Hugging Face at
-[`Jetzu77/Harmonia`](https://huggingface.co/Jetzu77/Harmonia). Download it with:
+Hosted in the Hugging Face bucket [`AI-PD/Harmonia`](https://huggingface.co/buckets/AI-PD/Harmonia):
 
 ```bash
 pip install huggingface_hub
-python checkpoints/download.py
+python checkpoints/download.py --model rfd3     # checkpoints/Harmonia-RFD3.ckpt
+python checkpoints/download.py --model rfd4     # checkpoints/Harmonia-RFD4/{config.json,model.safetensors}
 ```
 
-This fetches `epoch-0670_localattn.ckpt` into `checkpoints/`. If the HF repo
-is private, run `huggingface-cli login` (or set `HF_TOKEN`) first.
+Log in first (`huggingface-cli login` or `HF_TOKEN`) while the bucket is private. See [`checkpoints/README.md`](checkpoints/README.md)
+for what each file is.
 
-### Keeping Hugging Face in sync
+## Inputs
 
-A `pre-push` hook mirrors the checkpoint + model card to
-`Jetzu77/Harmonia` automatically whenever you `git push`. Enable it once per
-clone:
+Both models read the same two tensors, so one drawing can be compared across models:
 
-```bash
-git config core.hooksPath .githooks
+- `ss` `[L]`: `0` helix, `1` strand, `2` loop, `3` masked.
+- `adj` `[L, L]`: block adjacency, `1` contact (any C-beta pair within 6 A), `0` explicit non-contact, `2` masked (unspecified).
+  Fill unspecified pairs with 2, not 0: a dense-zero matrix asserts that those pairs must not touch.
+
+Harmonia-RFD4 additionally accepts the states `3` HOT (contact with a large interface) and `4` COLD (clearly apart).
+
+## Quick start
+
+Harmonia-RFD3: [`rfd3/README.md`](rfd3/README.md). Harmonia-RFD4: [`rfd4/README.md`](rfd4/README.md). The easiest way to produce inputs is
+ProteinPilot.
+
+## Results in brief
+
+Natural 5-target panel (5 targets x full / sparse / dense-zero adjacency), guidance weight 1.5, 240 designs per model.
+
+| | stock RFD4 (SS only) | Harmonia-RFD3 lineage (epoch 694) | **Harmonia-RFD4** |
+|---|---|---|---|
+| fold recovery (SS + adjacency) | 0.81 | 0.86 | **0.93** |
+| TM >= 0.5 to the native | 0.13 | 0.25 | **0.49** |
+| split rate | 10.8 % | 1.2 % | **0.4 %** |
+| designability (8 x ProteinMPNN, ESMFold2) | 0.95 | 0.59-0.62 | 0.93 |
+
+On a benchmark of 49 conditions exported from ProteinPilot (fold conditioning, motif scaffolding, binder interfaces, loop, ligand and
+nucleic-acid contacts), RFD4 formed drawn loop contacts far more often than RFD3 (about 79 % vs 28 % mean recovery), and both needed less
+sampling time per design than RFdiffusion. Known limitation of the released Harmonia-RFD4: unconditional generation
+splits 54 % of designs (stock RFD4: 69 %); later development checkpoints reduce this (see `rfd4/README.md`).
+
+## Repository layout
+
+```
+rfd3/            Harmonia-RFD3: trimmed RFdiffusion3 / foundry source, adapters, data and training scripts, docs
+rfd4/            Harmonia-RFD4: harmonia_ext, an add-on package for an unmodified RFD4-Proteina install
+checkpoints/     download.py and the Hugging Face model card
 ```
 
-It only re-uploads the (large) checkpoint when its size/mtime changed since
-the last sync — otherwise it just refreshes the model card, which is cheap.
-It never blocks the GitHub push: if `huggingface_hub` isn't installed, no
-one's logged in, or the upload fails, it prints a warning and lets the push
-through anyway. The checkpoint isn't in this repo, so point
-`HARMONIA_CKPT_PATH` at it if it's not at the default
-(`/work/gerstung/RFD3-adj-ckpt/epoch-0670_localattn.ckpt`).
+Development history (all training phases, notebooks, benchmarks) lives on the branches `phase10`, `harmonia-v2`, `rfd4-harmonia`
+and `rfd4-harmonia-full`.
 
-## Running inference
+## License
 
-Enable the adapters you need in the model config
-(`foundry/models/rfd3/configs/model/components/rfd3_net.yaml`):
-
-```yaml
-token_initializer:
-  ss_adapter:
-    enabled: true   # per-residue SS/ADJ conditioning
-  adj_adapter:
-    enabled: true
-```
-
-`ss_conditioning` (the ss_ratio Fourier encoder) is always present in the
-config — it's controlled at the input level instead (see below), not by an
-`enabled` flag.
-
-Then run RFD3 inference the normal way, pointing `ckpt_path` at the
-downloaded checkpoint and supplying SS/ADJ tensors or an `ss_ratio` value in
-your input JSON:
-
-```bash
-rfd3 design \
-    ckpt_path=checkpoints/epoch-0670_localattn.ckpt \
-    out_dir=logs/inference_outs/demo/0 \
-    inputs=my_inputs.json
-```
-
-Minimal SS/ADJ input example (full format in
-[`docs/ss_adj_inference.md`](docs/ss_adj_inference.md)):
-
-```json
-{
-  "example": {
-    "length": "150",
-    "ss_file": "/path/target_ss.pt",
-    "adj_file": "/path/target_adj.pt"
-  }
-}
-```
-
-`ss_file`/`adj_file` are `.pt`/`.npy` tensors: SS is `[L]` with
-`0=helix, 1=strand, 2=loop`; ADJ is a symmetric `[L,L]` binary contact
-matrix with zero diagonal. `select_ss` is also available for assigning
-labels inline by residue selection. Classifier-free guidance can be enabled
-with `inference_engine.inference_sampler.use_classifier_free_guidance=true`.
-
-For `ss_ratio`-only conditioning (no per-residue tensors), set a target
-value in `[0, 1]` per chain — see
-[`docs/ss_ratio_conditioning.md`](docs/ss_ratio_conditioning.md) for the
-exact feature key and CFG behavior.
-
-`scripts/inference/` has the concrete scripts used to generate benchmark
-inputs and run/analyze inference for this project (`run_ss_adj_inference.py`,
-`generate_ss_adj_conditioning_inputs*.py`, `analyze_ss_adj_conditioning.py`,
-`plot_ss_adj_results.py`).
-
-## Training / fine-tuning
-
-Checkpoint 670 was produced with the phased fine-tuning plan in
-[`docs/ss_adj_training_plan.md`](docs/ss_adj_training_plan.md): adapters
-first, then a standard/loop-conditioning data mix, then the full model at
-low learning rate. `scripts/data/` builds the training data (DSSP + block
-adjacency precomputation, loop-focused datasets); `scripts/training/` has
-the SLURM launchers for each phase.
-
-These launchers are reference scripts tied to the original cluster setup
-(SLURM partition/reservation names, a specific Python environment path, and
-a `Data_Mirrors/` training-data root that isn't part of this repo) — treat
-them as a starting point rather than turnkey, and adjust `ROOT`, `PYTHON`,
-`PARTITION`, and the data-mirror paths for your own environment.
+BSD 3-Clause, see [`LICENSE`](LICENSE). RFdiffusion3 / foundry source is Copyright (c) 2025 Institute for Protein Design, University of
+Washington; RFD4-Proteina is BSD 3-Clause as well. The HARMONIA conditioning code and checkpoints are an original contribution on top.
 
 ## Citation
-
-This builds on RFdiffusion3:
 
 ```bibtex
 @article{butcher2025_rfdiffusion3,
@@ -186,11 +88,11 @@ This builds on RFdiffusion3:
   doi = {10.1101/2025.09.18.676967},
   journal = {bioRxiv}
 }
+@article{corley2026_rfd4,
+  author = {Corley, Nathaniel and others},
+  title = {Biomolecular design through latent reasoning with RFD4-Proteina},
+  year = {2026},
+  doi = {10.64898/2026.11.12.766037},
+  journal = {bioRxiv}
+}
 ```
-
-## License
-
-BSD 3-Clause — see [`LICENSE`](LICENSE). RFD3/foundry source is
-Copyright (c) 2025 Institute for Protein Design, University of Washington;
-the SS/ADJ and ss_ratio conditioning work in this repo is an original
-contribution on top of it.
