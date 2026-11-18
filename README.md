@@ -49,7 +49,7 @@ With ProteinPilot you draw helices, strands and loops instead, connect them and 
 All three engines use the same secondary-structure and adjacency definition (contact = any Cβ–Cβ pair within
 6 Å), so one drawing can be compared across models. The RFdiffusion3/4 adjacency code (HARMONIA; `rfd3/` and `rfd4/`) is at
 [github.com/AI-PD-Lab/HARMONIA](https://github.com/AI-PD-Lab/HARMONIA), and the checkpoints `Harmonia-RFD3.ckpt` and `Harmonia-RFD4/` are at
-[huggingface.co/buckets/AI-PD/Harmonia](https://huggingface.co/buckets/AI-PD/Harmonia) (`python checkpoints/download.py` in the HARMONIA repo).
+[huggingface.co/AI-PD/Harmonia](https://huggingface.co/AI-PD/Harmonia) (`python checkpoints/download.py` in the HARMONIA repo).
 
 ## Quick start
 
