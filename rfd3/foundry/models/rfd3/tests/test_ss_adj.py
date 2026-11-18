@@ -131,7 +131,7 @@ class TestSSAdjCore:
         assert adj.dtype == np.float32
 
     def test_adj_standard_rfd1_compatible(self):
-        """Loop rows and columns must all be 0.0 in standard mode."""
+        """Loop rows and columns carry no contact (never 1.0) in standard mode."""
         n_h, n_e, n_l = 8, 6, 10
         ss = _make_ss_labels_np(n_h, n_e, n_l)
         L = n_h + n_e + n_l
@@ -139,8 +139,8 @@ class TestSSAdjCore:
         adj = self._adj_blocks_from_coords(ca_coords, ss, loop_adj=False)
 
         loop_mask = ss == self.SS_LOOP
-        assert adj[loop_mask].sum() == 0.0, "Loop rows must be all 0.0"
-        assert adj[:, loop_mask].sum() == 0.0, "Loop cols must be all 0.0"
+        assert (adj[loop_mask] != 1.0).all(), "Loop rows must carry no contact"
+        assert (adj[:, loop_mask] != 1.0).all(), "Loop cols must carry no contact"
 
     def test_adj_symmetric(self):
         n_h, n_e, n_l = 8, 6, 10
@@ -165,7 +165,7 @@ class TestSSAdjCore:
         ca_coords = np.zeros((L, 3), dtype=np.float32)
         adj = self._adj_blocks_from_coords(ca_coords, ss, loop_adj=False)
         unique_vals = set(np.unique(adj).tolist())
-        assert unique_vals <= {0.0, 1.0}
+        assert unique_vals <= {0.0, 1.0, 2.0}
 
     def test_rfd1_does_not_fill_within_block(self):
         ss = np.array([0.0, 0.0, 1.0, 1.0], dtype=np.float32)
@@ -695,7 +695,7 @@ class TestFeaturizeSSADJ:
 
 
 class TestRFD1Compatibility:
-    def test_standard_adj_has_zero_loop_rows_cols(self):
+    def test_standard_adj_has_no_loop_contacts(self):
         from foundry.data.ss_adj import SS_LOOP, _adj_blocks_from_coords
 
         n_h, n_e, n_l = 10, 8, 15
@@ -706,8 +706,8 @@ class TestRFD1Compatibility:
         adj = _adj_blocks_from_coords(ca_coords, ss, loop_adj=False)
 
         loop_mask = ss == SS_LOOP
-        assert adj[loop_mask].sum() == 0.0
-        assert adj[:, loop_mask].sum() == 0.0
+        assert (adj[loop_mask] != 1.0).all()
+        assert (adj[:, loop_mask] != 1.0).all()
 
     def test_ss_values_in_0_1_2(self):
         from foundry.data.ss_adj import SS_HELIX, SS_LOOP, SS_MASKED, SS_STRAND

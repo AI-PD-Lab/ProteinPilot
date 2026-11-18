@@ -4,7 +4,7 @@ SS + block-adjacency fold conditioning for [RFD4-Proteina](https://github.com/Ro
 (release = **R3**, 8,000 steps, EMA weights; Hugging Face `Harmonia-RFD4/`: `config.json` + `model.safetensors`, RFD4 bundle format).
 
 `harmonia_ext/` is an add-on package. It does not modify RFD4-Proteina: put it on `PYTHONPATH` next to an unmodified install
-(tested with upstream commit `fe95487`, the same code as the stock image built from `apptainer/rfd4-proteina.def`).
+(tested with upstream commit `fe95487`).
 
 ## What the model takes
 
@@ -77,19 +77,17 @@ Training and evaluation (reproduce R1-R3):
 
 - `harmonia_ext/adj_data.py`, `callbacks.py`, `train_entry.py`: training rows (PDB through RFD4's own pipeline plus SS and ADJ labels,
   curriculum, compactness gate, dense-zero dialect), step logging, and the RFD4 trainer entry with the new modules unfrozen.
-- `harmonia_ext/configs/experiment/harmonia_r{1,1_full,2,3}.yaml`: the recipes; **release = `harmonia_r3`**. Start from the stock RFD4
-  weights expanded with a zero `adj_embed` (`triadj_ext/s2/make_base_bundle.py` pattern, see `train_entry.py`):
-  `python -m harmonia_ext.train_entry experiment=harmonia_r3 hf_ckpt_path=<expanded base bundle> out_dir=<dir>`.
-- `harmonia_ext/train_r1.sbatch`, `eval_r1.sbatch`, `score_eval.sh`, `run_evals.sh`, `chain_evals.sh`, `wandb_sync_h4*`: the cluster
-  launchers used for the runs (SLURM + apptainer). Paths are placeholders (`/path/to/...`); edit them for your site.
-- `harmonia_ext/hotcold_score.py` and `tests/`: HOT/COLD effect scoring and CPU smoke tests of the data path.
-- `../rfd3/scripts/eval/` (scorer, designability, metrics) with `kit/` (natural 5-target panel manifest `kit/manifest.json`, reference
-  tensors, fold-recovery scripts): the evaluation harness behind the numbers above; `generate.py` defaults to this manifest
-  (`HARMONIA_MANIFEST` overrides).
+- `harmonia_ext/make_bundle.py`: expands the released RFD4 weights with a zero `adj_embed` (the training starting point).
+- `harmonia_ext/configs/experiment/harmonia_r{1,1_full,2,3}.yaml`: the recipes (each builds on the previous); **release = `harmonia_r3`**.
+  `python -m harmonia_ext.make_bundle --src <RFD4 weights> --dst <base bundle>`, then
+  `python -m harmonia_ext.train_entry experiment=harmonia_r3 hf_ckpt_path=<base bundle> out_dir=<dir>` (add the usual RFD4 trainer overrides
+  for GPUs, batch size and workers; the runs used 2 x 64 rows per step, 8,000 steps).
+- `harmonia_ext/hotcold_score.py`: HOT/COLD effect scoring. `../rfd3/scripts/eval/` (scorer, designability, metrics) with `kit/` (natural
+  5-target panel manifest `kit/manifest.json`, reference tensors, fold-recovery scripts) is the evaluation harness behind the numbers
+  above; `generate.py` defaults to this manifest (`HARMONIA_MANIFEST` overrides).
 - `triadj_ext/`: helper modules the data and generation code import (RING-format dataset reader, optimiser glue, conditional
   generation, design-with-contacts). They come from the TRIAD-J research code, are used unmodified, and are only the subset that
   `harmonia_ext` imports.
-- `apptainer/rfd4-proteina.def`: the stock RFD4-Proteina container recipe (upstream, unchanged).
 
 Training needs data that is not in this repository (a PDB mirror tar with index and the RING-format metadata the dataset reader loads;
 see `triadj_ext/ring_data.py`).

@@ -65,7 +65,7 @@ splits 54 % of designs (stock RFD4: 69 %); later development checkpoints reduce 
 ## Repository layout
 
 ```
-rfd3/            Harmonia-RFD3: trimmed RFdiffusion3 / foundry source, adapters, data / training / evaluation scripts, phase history, docs
+rfd3/            Harmonia-RFD3: trimmed RFdiffusion3 / foundry source, adapters, data / training / evaluation scripts, docs
 rfd4/            Harmonia-RFD4: harmonia_ext (inference, training, evaluation) for an unmodified RFD4-Proteina install, plus the triadj_ext helpers
 checkpoints/     download.py and the Hugging Face model card
 ```

@@ -45,7 +45,7 @@ def test_scaffold_expansion_masks_loops_and_preserves_topology():
     np.testing.assert_array_equal(expanded_ss, np.array([3, 0, 0, 3, 3, 3, 3, 1, 1, 3]))
     assert expanded_adj[np.ix_([1, 2], [7, 8])].sum() == 4
     assert expanded_adj[np.ix_([7, 8], [1, 2])].sum() == 4
-    assert expanded_adj[[0, 3, 4, 5, 6, 9]].sum() == 0
+    assert (expanded_adj[[0, 3, 4, 5, 6, 9]] == 2).all()
     assert metadata["sampled_insertions"] == [2]
 
 
@@ -80,8 +80,8 @@ def test_ss_boundary_mask_zeros_conditioning():
     )
     np.testing.assert_array_equal(expanded_ss, np.array([3, 0, 0, 3, 3, 3, 1, 1, 3]))
     masked = np.array([0, 3, 4, 5, 8])
-    assert expanded_adj[masked].sum() == 0
-    assert expanded_adj[:, masked].sum() == 0
+    assert (expanded_adj[masked] == 2).all()
+    assert (expanded_adj[:, masked] == 2).all()
 
 
 def test_design_spec_builds_expanded_contig_length(tmp_path):

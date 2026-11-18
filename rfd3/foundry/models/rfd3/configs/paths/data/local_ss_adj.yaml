@@ -26,7 +26,7 @@ ss_adj_loop_val_metadata: null
 ss_adj_pn_units_train_metadata: ${paths.data.pdb_parquet_dir}/pn_units_df_train.parquet
 ss_adj_interfaces_train_metadata: ${paths.data.pdb_parquet_dir}/interfaces_df_train.parquet
 
-# Optional adjacency-focused validation splits (see docs/motif_adjacency_wiring.md section 16).
+# Optional adjacency-focused validation splits.
 ss_adj_val_protein_protein_metadata: ${paths.data.pdb_parquet_dir}/ss_adj_val/interfaces_val_protein_protein.parquet
 ss_adj_val_protein_ligand_metadata: ${paths.data.pdb_parquet_dir}/ss_adj_val/interfaces_val_protein_ligand.parquet
 ss_adj_val_protein_na_metadata: ${paths.data.pdb_parquet_dir}/ss_adj_val/interfaces_val_protein_na.parquet

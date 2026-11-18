@@ -34,7 +34,7 @@ min_distance: 4.5
 # N/CA/C (glycine) -> CA (non-protein). This is the SAME order the analysis
 # metric already uses (analyze_ss_adj_conditioning.py reads CB, falling back to
 # CA), so turning it on ALIGNS loss and metric rather than diverging them -- no
-# re-baseline needed. See docs/motif_adjacency_wiring.md
+# re-baseline needed.
 use_cb: false
 
 # Freeze fixed-motif coordinates inside this loss, so a designed<->target

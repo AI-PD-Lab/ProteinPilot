@@ -16,23 +16,21 @@ behaves like the base model wherever the conditioning is unset.
 
 - **SS/ADJ (per-residue).** Condition on a secondary-structure string (helix / strand / loop) and/or a block adjacency matrix. Adjacency
   covers protein, ligand and nucleic-acid blocks, loop contacts, and distinguishes *contact* (1) from *explicit non-contact* (0) from
-  *masked* (2). Exact input format: [`docs/ss_adj_inference.md`](docs/ss_adj_inference.md); how it is wired for motifs and binders:
-  [`docs/motif_adjacency_wiring.md`](docs/motif_adjacency_wiring.md).
+  *masked* (2). Exact input format: [`docs/ss_adj_inference.md`](docs/ss_adj_inference.md).
 - **ss_ratio (global).** One scalar per chain, `E / (H + E)`, biasing the overall fold composition without per-residue topology
   ([`docs/ss_ratio_conditioning.md`](docs/ss_ratio_conditioning.md)).
 
 ## Layout
 
 ```
-foundry/models/rfd3/   RFD3 model, configs (experiment/ss_adj_phase10_rollback.yaml = the release stage), source, tests
+foundry/models/rfd3/   RFD3 model, configs (experiment/ss_adj_phase10_rollback.yaml = the release stage), source, SS/ADJ tests
 foundry/src/           core foundry framework
 patches/atomworks/     small patch on top of public atomworks[ml] (tar-backed data loading, training only)
-scripts/data/          build / precompute / validate SS/ADJ training data
-scripts/inference/     generate conditioning inputs, run and analyse inference
-scripts/training/      reference launcher for the release stage, ss_ratio cache tools
+scripts/data/          build the SS/ADJ training data (DSSP + block adjacency, splits, PDB mirror index)
+scripts/inference/     example inputs and the inference launcher
+scripts/training/      launcher for the release stage
 scripts/eval/          evaluation harness (scorer, designability, metrics) and kit/ with the natural-panel manifest
-history/               configs and launchers of every development phase (1-10) and ss_ratio, wandb tools
-docs/                  design docs
+docs/                  input format, training plan, ss_ratio
 ```
 
 ## Setup
@@ -80,17 +78,12 @@ generates a small example input set first.
 **Fill unspecified pairs with 2 (masked), not 0.** A dense-zero matrix asserts that those pairs must not touch, which tears folds apart
 on this lineage. Reserve 0 for non-contacts you actually mean.
 
-`scripts/inference/` also has the benchmark input generators (`generate_ss_adj_conditioning_inputs_v2.py`), the analyser
-(`analyze_ss_adj_conditioning.py`) and the plotting script.
-
 ## Training
 
 Stage 10 is reproducible with `scripts/training/train_harmonia_rfd3.sh` given the epoch-694 checkpoint and your own PDB mirror; read the
 header of that script and [`docs/ss_adj_training_plan.md`](docs/ss_adj_training_plan.md). Data paths are set in
 `foundry/models/rfd3/configs/paths/data/local_ss_adj.yaml` (copy and edit). The launcher is a reference, not turnkey: it carries no
-scheduler directives and the training data are not part of this repository. `history/` holds the experiment configs and SLURM launchers of every earlier phase (1-9, ss_ratio) exactly as they were run; they target
-the development code of their time (the `main` / `phase9-adjacency-spots` branches), so they are a record, not guaranteed to compose with this
-tree. Path configs are `history/configs/cluster_*_local*.yaml`; the generic one for this tree is
+scheduler directives and the training data are not part of this repository. Earlier phases (1-9) and their launchers are on the `main`, `phase9-adjacency-spots` and `phase10` branches. Path configs for training are set in
 `foundry/models/rfd3/configs/paths/data/local_ss_adj.yaml`.
 
 ## License

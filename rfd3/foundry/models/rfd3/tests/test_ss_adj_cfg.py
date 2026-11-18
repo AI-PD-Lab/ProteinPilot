@@ -13,7 +13,7 @@ def test_apply_cfg_defaults_masks_ss_adj_and_ratio():
 
     assert torch.equal(out["ss_ratio"], torch.tensor([-1.0]))
     assert torch.equal(out["ss_labels"], torch.full((3,), 3, dtype=torch.long))
-    assert torch.count_nonzero(out["adj_matrix"]) == 0
+    assert torch.equal(out["adj_matrix"], torch.full((3, 3), 2.0))
 
 
 def test_apply_cfg_defaults_leaves_unlisted_features_unchanged():
