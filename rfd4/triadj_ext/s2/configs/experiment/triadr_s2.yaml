@@ -1,0 +1,194 @@
+# @package _global_
+# TRIAD-R S2 fine-tuning of the released RFD4-Proteina with the generated pair-interaction stream. Exact commands: triadj_ext/s2/__init__.py.
+#   python -m triadj_ext.train_entry experiment=triadr_s2 arm=<A|B|C|Z> hf_ckpt_path=/w/triadr_s2_base_<A|C> out_dir=<node-local> ...
+# (train_entry adds hydra.searchpath for this directory; `arm=` selects configs/arm/<arm>.yaml, the last entry of the defaults list.)
+defaults:
+  - /releases/flow/2026_10_19_hero_pretrain
+  # replay task mix = the repo's "unconditional pretraining" preset (90 % unconditional, 5 % folding, 5 % inverse folding), see s2/__init__.py
+  - /design_tasks/presets@datasets.train.replay_pdb.dataset.design_tasks: unconditional_pretraining
+  - /design_tasks/presets@datasets.val.val_replay.dataset.design_tasks: unconditional_pretraining
+  - _self_
+  - /arm: A            # `arm=B` etc. on the command line replaces this entry; arm files are `# @package _global_`
+
+run_name_: triadr_s2
+# hf_ckpt_path = the expanded base bundle (python -m triadj_ext.s2.make_base_bundle): A,B,Z -> triadr_s2_base_A, C -> triadr_s2_base_C. Required on the
+# command line; a `???` here would NOT protect (OmegaConf merge keeps the primary config's null over a missing value), so s2.glue raises instead.
+
+# ---- data: two leaves of ONE RingDataset class over the same PDB manifest rows, same crop recipe as the release (hero_pretrain) ------------
+_s2_crop:                                   # release crop recipe: crop to a 0.9-1.0 fraction of the chain, at most 256 tokens, 20 % uncropped
+  path_length_search_cutoff: 64             # read by train.py:_adopt_bundle_architecture (must equal the bundle's 64)
+  crop_size: null
+  crop_size_range: ${_crop_size_range}
+  max_crop_size: ${_max_tokens}
+  p_no_subcrop: ${_p_no_subcrop}
+  loss_weight_cfg: ${_loss_weights}
+
+# hero_pretrain's shared streaming-source definitions (only referenced by the 14 stock leaves below): `${oc.env:DATASET_STORE_ROOT}` inside makes
+# `train.py:print_config_tree(resolve=True)` and the resume branch (`to_container(resolve=True)` of the saved hparams) raise without that env var.
+_hero_streaming: null
+
+datasets:
+  train:
+    # the 14 stock streaming leaves cannot run here (they read $DATASET_STORE_ROOT/train_datasets/streaming-latest, absent on this cluster)
+    afdb_monomer: null
+    omol: null
+    plinder: null
+    pdb_interfaces: null
+    ted_dimers: null
+    tcr_interfaces_distill: null
+    na_complex: null
+    rna_monomer: null
+    antibody_interfaces_distill: null
+    tcr_interfaces_pdb: null
+    antibody_interfaces_pdb: null
+    cpsea_pdb: null
+    cpsea_afdb: null
+    pdb_dna_interface: null
+
+    ring_pdb:                               # RING-labelled rows, all conditioning off (unconditional task, the P0 data), labels from the RING lmdb
+      probability: 0.45
+      weights: {_target_: atomworks.ml.samplers.calculate_weights_by_inverse_cluster_size, cluster_column: cluster}
+      dataset:
+        _target_: triadj_ext.ring_data.RingDataset
+        name: ring_pdb
+        rows: all                           # monomer + interface rows of pdb_afdb_train_clustersplit (PDB entries only)
+        split: train                        # minus every sequence cluster of the val manifest
+        ring_labels: true
+        seed: 11
+        transform: ${_s2_crop}
+    replay_pdb:                             # same rows, NO labels (stream = all MASK, no ring loss), original design-task mix (see s2/__init__.py)
+      probability: 0.55
+      weights: {_target_: atomworks.ml.samplers.calculate_weights_by_inverse_cluster_size, cluster_column: cluster}
+      dataset:
+        _target_: triadj_ext.ring_data.RingDataset
+        name: replay_pdb
+        rows: all
+        split: train
+        ring_labels: false
+        seed: 23
+        transform:
+          path_length_search_cutoff: ${_s2_crop.path_length_search_cutoff}
+          crop_size: null
+          crop_size_range: ${_crop_size_range}
+          max_crop_size: ${_max_tokens}
+          p_no_subcrop: ${_p_no_subcrop}
+          loss_weight_cfg: ${_loss_weights}
+          centroid_kwargs: {p_add_centroid_condition: 0.2, noise_std_angstrom: 5.0}   # configs/datasets/train/pipeline_defaults.yaml
+  val:                                      # loss-only validation (no sampling, no folding oracle); the stock coverage sets need AF3 oracles / data we do not have
+    unconditional: null
+    unindexed_motif_scaffold_subset: null
+    indexed_motif_scaffold_subset: null
+    mcsa_subset: null
+    mcsa_subset_fixed_ligand: null
+    mcsa_subset_no_ligand: null
+    ppi_bb_only_subset_12: null
+    dna_binder_structure_context: null
+    dna_binder_sequence_context: null
+    disco_subset: null
+    sequence_bias: null
+    rasa_IAI: null
+    # the SAME 256 held-out rows (val manifest, disjoint sequence clusters) under three stream conditions: val_mode 1 = all-MASK, 2 = full
+    # reveal (ring_flow.corrupt_batch), and the replay task mix. Compare the STRUCTURE terms only (bb_ca, local_latents): S2LogCallback logs
+    # `S2 val set=derived d_bb_ca d_local_latents d_structure` = masked - full. The TOTAL loss is confounded (full reveal removes the hidden-pair
+    # ring loss, so total(masked) > total(full) even with identical structure predictions). Strict rows: substitute_on_failure false, the val
+    # collate drops failed rows (never replaces them) and every `S2 val set=` line reports requested / evaluated / failed.
+    val_ring_masked:
+      dataset:
+        _target_: triadj_ext.ring_data.RingDataset
+        name: val_ring_masked
+        rows: all
+        split: val
+        n_val: 256
+        ring_labels: true
+        val_mode: 1
+        seed: 5
+        substitute_on_failure: false        # strict: a row that cannot be built is dropped and counted (collate_batch_drop_failed), not replaced
+        transform: ${_s2_crop}
+      compute_loss: true
+      generate: false
+      t_grid: [0.1, 0.3, 0.5, 0.7, 0.9]
+    val_ring_full:
+      dataset:
+        _target_: triadj_ext.ring_data.RingDataset
+        name: val_ring_full
+        rows: all
+        split: val
+        n_val: 256
+        ring_labels: true
+        val_mode: 2
+        seed: 5
+        substitute_on_failure: false
+        transform: ${_s2_crop}
+      compute_loss: true
+      generate: false
+      t_grid: [0.1, 0.3, 0.5, 0.7, 0.9]
+    val_replay:
+      dataset:
+        _target_: triadj_ext.ring_data.RingDataset
+        name: val_replay
+        rows: all
+        split: val
+        n_val: 256
+        ring_labels: false
+        seed: 5
+        substitute_on_failure: false
+        transform: ${datasets.train.replay_pdb.dataset.transform}
+      compute_loss: true
+      generate: false
+      t_grid: [0.1, 0.3, 0.5, 0.7, 0.9]
+
+# No refolding oracles / pass criteria: the AF3 oracle does not exist on this cluster and every val set is loss-only. `metrics: null` makes
+# Proteina.configure_metrics build no metric manager (proteina.py:1531). The CLI form `'~metrics'` FAILS to compose on top of hero_pretrain:
+# its defaults list has `override /metrics/refolding_oracles: af3`, which has no match once the group is removed.
+metrics: null
+
+# release values kept: crop 256, I=256 padding (dataloaders.train...fixed_dimensions.I), in_order true
+dataloaders:
+  batch_size: 8                             # rows per GPU per micro-batch / exploration_k; the GPU smoke picks the largest with peak_gib < ~65
+  num_workers: 12                           # per GPU (1.6 samples/s/core measured; the GPU needs <= ~7 rows/s)
+  prefetch_factor: 4
+  val:
+    dataloader_params:
+      batch_size: 8
+      num_workers: 4
+      collate_fn:
+        _target_: triadj_ext.ring_data.collate_batch_drop_failed   # drops strict-mode sentinels, otherwise upstream collate_batch
+
+training:
+  exploration_k: 1                          # release: 4 (best-of-4, mode seeking). K=1 here; arm Z isolates the drift from K=4 -> 1
+  exploration_losses: [bb_ca, local_latents]
+
+opt:
+  lr: 5.0e-5                                # release LoRA stage (hero_lora_c384)
+  new_module_lr_mult: 10.0                  # optim_glue: Adam group of the new modules (ring_*) runs at 10 x lr
+  adam_warmup_steps: 200
+  muon_warmup_steps: 200
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 2
+  steps_per_epoch: 100
+  max_epochs: 20                            # CLI: opt.max_epochs=$((STEPS/100))
+  val_every_n_epochs: 5
+  compute_val_loss: true
+  num_sanity_val_steps: 2
+  muon_exclude_param_patterns:              # the release list + the new modules (ring_flow.register_optimizer_split appends the latter anyway)
+    - _factory\.
+    - ^nn\.(local_latents_linear|ca_linear|insertion_q_proj|insertion_k_proj)\.
+    - ^nn\.sequence_readout\.
+    - ^nn\.ring_
+
+callbacks:
+  ema_callback:
+    _target_: triadj_ext.s2.callbacks.TriadSimpleEMA
+    decay: 0.998                            # 0.999 would keep 5 % of the init after 3000 steps and shrink the zero-init ring modules in the EMA
+  ring_epoch_callback:
+    _target_: triadj_ext.s2.callbacks.RingSetEpochCallback
+  s2_log_callback:
+    _target_: triadj_ext.s2.callbacks.S2LogCallback
+    every_n: 10
+
+log:
+  log_wandb: false                          # compute nodes have no internet: metrics = `S2 step=` stdout lines replayed by wandb_sync_s2.py
+  checkpoint: true
+  checkpoint_every_n_epochs: 10             # chk_* + chk_*-ema.ckpt every 1000 steps (offline designability scoring)
+  last_ckpt_every_n_epochs: 1               # last.ckpt every epoch = auto-resume point
+  tags: [triad-r, s2]

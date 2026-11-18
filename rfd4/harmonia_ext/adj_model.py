@@ -4,7 +4,7 @@
 and ADDED to the pair input z0 inside ``_run_trunk`` (which re-adds z_init on every recycle pass), exactly like RFD3's ADJAdapter adds
 into Z_init_II. States MASKED (2) and PAD (5) are multiplied by 0, so an unspecified map is the released model bit-for-bit, and a
 missing ``adj_state`` key is the released model too. SS needs no new module: RFD4's own C_SEC channel (SecondaryStructureSeqFeat,
-0 none / 1 helix / 2 sheet / 3 loop) carries it; it is unfrozen during the fine-tune.
+0 none / 1 helix / 2 sheet / 3 loop) carries it; it is unfrozen during the fine-tune (see train_entry.UNFREEZE_PATTERNS).
 
 Registry: ``Proteina.__init__`` builds ``LocalLatentsTransformer`` through the module global of rfproteina.proteina, so ``register()``
 rebinds it (every entry point: from_pretrained, load_from_checkpoint, train.py then builds the subclass).

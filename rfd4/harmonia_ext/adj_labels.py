@@ -10,8 +10,8 @@ ADJ (new pair input, token space [I, I]):
     3 HOT          a revealed contact with a LARGE interface (CB-pair count n6 in the top of the protein's contacts)
     4 COLD         a revealed non-contact that is CLEARLY apart (min CB distance >= COLD_MIN_DIST)
     5 PAD          padding (collate fill); embeds to exactly 0
-HOT / COLD are defined by the data (not by an auxiliary loss, which left them inert on RFD3): HOT = "contact plus as much interface as
-possible", COLD = "non-contact, enforced more strongly".
+HOT / COLD are defined by the data (not by an auxiliary loss): on RFD3 the loss-only definition left them inert (K36/K40), and the
+user wants HOT to mean "contact plus as much interface as possible", COLD "non-contact, enforced more strongly".
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def virtual_cb(n: np.ndarray, ca: np.ndarray, c: np.ndarray) -> np.ndarray:
 
 def ss_blocks(ss: np.ndarray, chain: np.ndarray, resid: np.ndarray | None = None) -> np.ndarray:
     """Block id per residue/token (-1 = no block): maximal runs of HELIX or SHEET within one chain and without a residue-number gap
-    (``resid`` consecutive), at least MIN_BLOCK_LEN long. Called on the FINAL tokens after the crop (blocks computed on
+    (``resid`` consecutive), at least MIN_BLOCK_LEN long. Called on the FINAL tokens after the crop (red-team N001 #4/#7: blocks computed on
     the source chain encoded cropped-away SS through the same-block mask, and runs merged across chain breaks)."""
     n = len(ss)
     blk = np.full(n, -1, dtype=np.int64)
@@ -108,7 +108,7 @@ def reveal_block_pairs(gt: np.ndarray, dmin: np.ndarray, n6: np.ndarray, mode: s
     lab = gt[iu, ju]
     known = lab != ADJ_MASKED
     show = known.copy()
-    if mode == "sparse":                                 # a random subset of the KNOWN pairs, label-independent (a
+    if mode == "sparse":                                 # a random subset of the KNOWN pairs, label-independent (red-team N001 #3: a
         show = known & (rng.random(len(lab)) < rng.uniform(0.1, 0.9))   # contact-biased reveal made "hidden" mean "probably non-contact")
     st = np.where(show, lab, ADJ_MASKED)
     # HOT: shown contacts with a large interface
@@ -168,7 +168,7 @@ def reveal_ss(ss: np.ndarray, mode: str, rng: np.random.Generator) -> np.ndarray
 
 def scorer_cb(n: np.ndarray, ca: np.ndarray, c: np.ndarray) -> np.ndarray:
     """Virtual CB with the RFD3 panel scorer's coefficients (eval_common.reconstruct_cb). Used ONLY by the compactness gate so that it
-    measures exactly what the panel's split detector measures ; ADJ labels keep virtual_cb (RFD1 / R1 convention)."""
+    measures exactly what the panel's split detector measures (red-team N003 #2); ADJ labels keep virtual_cb (RFD1 / R1 convention)."""
     b = ca - n
     cc = c - ca
     return -0.57910144 * np.cross(b, cc) + 0.5689693 * b - 0.5441217 * cc + ca

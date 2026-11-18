@@ -1,0 +1,32 @@
+{
+  "version": "2026-11-07 evalchain v1",
+  "note": "Pre-registered kill criteria of N028 (S1) and N030 (M1), reused by N032 (K1) and N033 (S2). Values are evaluated on the seed-1 screen of specs_v2 at CFG 1.5 unless stated; baselines are re-scored by the same code in the same run (never copied numbers).",
+  "baseline": {
+    "specs_v2_tag": "v2_E2_e0596_h02r1cen2m0",
+    "specs_v2_seed_tags": {"20261015": "v2_E2_e0596_h02r1cen2m0_s20261015", "20261016": "v2_E2_e0596_h02r1cen2m0_s20261016"},
+    "heldout_tag": "v2_E2_e0596_heldout_s1",
+    "ross_tars": [
+      "/path/to/work_rfd3/n002_smoke/ross128_v2E2h02r1cen2m0s1_cfg2.0.tar.gz",
+      "/path/to/work_rfd3/n002_smoke/ross128_v2E2h02r1cen2m0s2_cfg2.0.tar.gz"
+    ],
+    "designability_json": "/path/to/work_rfd3/v2/eval/v2_E2_e0596_h02r1cen2m0_cfg2.0.designability.json",
+    "recorded": {"sfar15_seed1": 0.754, "sfar15_3seed_mean": 0.745, "designability_cfg2.0": 0.592, "ross_full_split_pct": 21.1, "source": "N019 item (jobs 1209800, 1214841-1214844)"}
+  },
+  "recipe_n019": "inference_sampler.contact_potential_scale=0.5 inference_sampler.contact_potential_t_on=10 inference_sampler.contact_potential_t_off=1 inference_sampler.contact_potential_mode=block inference_sampler.contact_potential_softness=0.2 inference_sampler.contact_potential_repulsion=1.0 inference_sampler.centroid_potential_scale=2.0 inference_sampler.centroid_potential_margin=0.0 inference_sampler.centroid_potential_t_on=40 inference_sampler.centroid_potential_t_off=10",
+  "sd_recipe": 0.015,
+  "goal_arms": ["full", "sparse8", "dense0_true"],
+  "criteria": [
+    {"id": "valid", "kind": "kill", "metric": "every stage tar valid (harness meta.valid, designs complete, no adapter re-init) and its job COMPLETED", "op": "==", "threshold": true, "source": "eval_checkpoint.sbatch validity logic"},
+    {"id": "sfar15", "kind": "kill", "metric": "SFAR@1.5, goal arms pooled, seed 1 (goal_metric rule)", "op": ">=", "threshold": 0.754, "source": "N028/N030: kill if SFAR@1.5 < 0.754 (N019 seed-1 value)"},
+    {"id": "sandwich_pass", "kind": "kill", "metric": "sandwich_1tit SFAR pass, goal arms pooled, CFG 1.5", "op": ">=", "threshold": 0.50, "source": "N028/N030: kill if sandwich pass < 0.50"},
+    {"id": "sandwich_target", "kind": "goal", "metric": "sandwich_1tit SFAR pass, goal arms pooled, CFG 1.5", "op": ">=", "threshold": 0.55, "source": "N028 target 0.46 -> >= 0.55 (the caller's brief lists 0.55 as the kill; the items pre-register 0.50)"},
+    {"id": "hairpin12_cut", "kind": "kill", "metric": "1 - p12(tag)/p12(baseline): sandwich strands 1-2 paired (>= 2 CA-CA < 5.5 A), goal arms pooled, CFG 1.5", "op": ">=", "threshold": 0.40, "source": "N028/N030: kill if hairpin12 not cut >= 40 %"},
+    {"id": "paired14", "kind": "kill", "metric": "p14: sandwich strands 1-4 paired, goal arms pooled, CFG 1.5", "op": ">=", "threshold": 0.70, "source": "N028/N030: kill if paired14 < 0.70"},
+    {"id": "split", "kind": "kill", "metric": "universal SPLIT fraction (kit split3 nat-relaxed rule) per goal arm x CFG, 5 targets pooled; worst cell", "op": "<=", "threshold": 0.05, "source": "N028/N030: kill if split > 5 % any arm"},
+    {"id": "breaks", "kind": "kill", "metric": "mean ca_breaks per design, goal arms pooled, per CFG; worst CFG", "op": "<=", "threshold": 0.005, "source": "N028/N030: kill if breaks > 0.005"},
+    {"id": "designability", "kind": "kill", "metric": "designable fraction (LigandMPNN K=8 -> ESMFold2, scRMSD < 2 A, pLDDT > 80), goal arms x 5 targets x 8 designs, CFG 2.0", "op": ">=", "threshold": 0.55, "source": "N028/N030: kill if designability < 55 % (N019 baseline 59.2 % at CFG 2.0)"},
+    {"id": "heldout", "kind": "kill", "metric": "held-out beta pack (fn3_1fna, ferredoxin_1ulr, prealbumin_1f41, barrel_1stp) SFAR@1.5 delta vs v2_E2_e0596_heldout_s1", "op": "not_worse", "threshold": -0.03, "source": "N029/N030 'held-out beta pack vs baseline'; evalchain rule: FAIL only if delta < -2 x 0.015 AND the bootstrap 95 % CI excludes 0"},
+    {"id": "ross", "kind": "guardrail", "metric": "old-Rossmann stress: full_rossmann_like SPLIT % (strict kit rule), mean of seeds 7101/7102, CFG 2.0", "op": "<=", "threshold": 30.0, "source": "N017-N019 stress panel; E2 29.7 / p0694 28.9 / N019 21.1: a guardrail (not a pre-registered kill), FAIL = back at the pre-N017 level"},
+    {"id": "sfar15_3seed", "kind": "goal", "metric": "SFAR@1.5 mean over seeds 20261014/15/16 (--full only)", "op": ">=", "threshold": 0.745, "source": "N019 3-seed mean 0.745 (confirmation reference)"}
+  ]
+}

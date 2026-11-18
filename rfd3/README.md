@@ -30,6 +30,8 @@ patches/atomworks/     small patch on top of public atomworks[ml] (tar-backed da
 scripts/data/          build / precompute / validate SS/ADJ training data
 scripts/inference/     generate conditioning inputs, run and analyse inference
 scripts/training/      reference launcher for the release stage, ss_ratio cache tools
+scripts/eval/          evaluation harness (scorer, designability, metrics) and kit/ with the natural-panel manifest
+history/               configs and launchers of every development phase (1-10) and ss_ratio, wandb tools
 docs/                  design docs
 ```
 
@@ -86,8 +88,10 @@ on this lineage. Reserve 0 for non-contacts you actually mean.
 Stage 10 is reproducible with `scripts/training/train_harmonia_rfd3.sh` given the epoch-694 checkpoint and your own PDB mirror; read the
 header of that script and [`docs/ss_adj_training_plan.md`](docs/ss_adj_training_plan.md). Data paths are set in
 `foundry/models/rfd3/configs/paths/data/local_ss_adj.yaml` (copy and edit). The launcher is a reference, not turnkey: it carries no
-scheduler directives and the training data are not part of this repository. Earlier stages and the experiment configs of every phase are on
-the `phase10` branch.
+scheduler directives and the training data are not part of this repository. `history/` holds the experiment configs and SLURM launchers of every earlier phase (1-9, ss_ratio) exactly as they were run; they target
+the development code of their time (the `main` / `phase9-adjacency-spots` branches), so they are a record, not guaranteed to compose with this
+tree. Path configs are `history/configs/cluster_*_local*.yaml`; the generic one for this tree is
+`foundry/models/rfd3/configs/paths/data/local_ss_adj.yaml`.
 
 ## License
 

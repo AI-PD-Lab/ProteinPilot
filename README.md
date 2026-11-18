@@ -65,13 +65,13 @@ splits 54 % of designs (stock RFD4: 69 %); later development checkpoints reduce 
 ## Repository layout
 
 ```
-rfd3/            Harmonia-RFD3: trimmed RFdiffusion3 / foundry source, adapters, data and training scripts, docs
-rfd4/            Harmonia-RFD4: harmonia_ext, an add-on package for an unmodified RFD4-Proteina install
+rfd3/            Harmonia-RFD3: trimmed RFdiffusion3 / foundry source, adapters, data / training / evaluation scripts, phase history, docs
+rfd4/            Harmonia-RFD4: harmonia_ext (inference, training, evaluation) for an unmodified RFD4-Proteina install, plus the triadj_ext helpers
 checkpoints/     download.py and the Hugging Face model card
 ```
 
-Development history (all training phases, notebooks, benchmarks) lives on the branches `phase10`, `harmonia-v2`, `rfd4-harmonia`
-and `rfd4-harmonia-full`.
+The full code of the released models is in this tree. The later research lines (RFD3 phases 9-11, the RFD4 R4-R7 checkpoints, notebooks)
+live on the branches `phase10`, `harmonia-v2`, `rfd4-harmonia` and `rfd4-harmonia-full`.
 
 ## License
 
