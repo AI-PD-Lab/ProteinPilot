@@ -23,16 +23,12 @@ class WeightLoadingError(Exception):
 class WeightLoadingPolicy(StrEnum):
     """Policy for handling weights when loading checkpoints."""
 
-    # Always keep default initialization, regardless of whether the parameter is in the checkpoint or shapes match
     REINIT = auto()
 
-    # Always zero-initialize, regardless of whether the parameter is in the checkpoint or shapes match
     ZERO_INIT = auto()
 
-    # Copy from checkpoint only when shapes match exactly, otherwise error
     COPY = auto()
 
-    # Copy from checkpoint if tensors are the same rank, padding with zeros if shapes don't match exectly
     COPY_AND_ZERO_PAD = auto()
 
 
@@ -56,7 +52,6 @@ class _PatternPolicyMixin:
 
     @staticmethod
     def _glob_to_regex(pattern: str) -> str:
-        # Convert glob pattern to regex string
         return (
             pattern.replace(".", r"\.")
             .replace("*", ".*")
@@ -76,10 +71,8 @@ class _PatternPolicyMixin:
     def _get_policy_by_pattern(
         self, param_name: str, policy_dict: dict[str, any], default: any
     ) -> any:
-        # Exact match first
         if policy_dict and param_name in policy_dict:
             return policy_dict[param_name]
-        # Pattern match
         for pattern, value in self._compiled_patterns.items():
             if pattern.match(param_name):
                 return value
@@ -179,11 +172,10 @@ def load_weights_with_policies(
         dict: The updated state_dict (not loaded into model yet)
     """
     if config is None:
-        # (Initialize default config if not provided)
         config = WeightLoadingConfig()
 
     current_state = model.state_dict()
-    updated_state = {}  # We will update this with the new weights
+    updated_state = {}
 
     def _apply_policy(
         name: str,
@@ -196,15 +188,12 @@ def load_weights_with_policies(
         Raises WeightLoadingError for any policy application failures.
         """
         if policy == WeightLoadingPolicy.REINIT:
-            # Keep original initialization
             return current_param
 
         elif policy == WeightLoadingPolicy.ZERO_INIT:
-            # Zero-initialize
             return torch.zeros_like(current_param)
 
         elif policy == WeightLoadingPolicy.COPY:
-            # Must have checkpoint param and shapes must match
             if checkpoint_param is None:
                 raise WeightLoadingError(f"Parameter '{name}' not found in checkpoint")
             if current_param.shape != checkpoint_param.shape:
@@ -214,7 +203,6 @@ def load_weights_with_policies(
             return checkpoint_param
 
         elif policy == WeightLoadingPolicy.COPY_AND_ZERO_PAD:
-            # Must have checkpoint param and same number of dimensions
             if checkpoint_param is None:
                 raise WeightLoadingError(f"Parameter '{name}' not found in checkpoint")
             if len(current_param.shape) != len(checkpoint_param.shape):
@@ -222,7 +210,6 @@ def load_weights_with_policies(
                     f"Different dimensions for '{name}': model {len(current_param.shape)}D vs checkpoint {len(checkpoint_param.shape)}D"
                 )
 
-            # Copy where shapes match, zero-init the rest
             new_param = torch.zeros_like(current_param)
             slices = tuple(
                 slice(0, min(d_ckpt, d_current))
@@ -233,20 +220,15 @@ def load_weights_with_policies(
             new_param[slices] = checkpoint_param[slices]
             return new_param
 
-    # ... loop through all named parameters in the model
     for name, current_param in current_state.items():
-        # Get the policy for this parameter
         policy = config.get_policy(name)
 
-        # Get the corresponding parameter from the checkpoint
         checkpoint_param = ckpt.get(name, None)
 
         try:
-            # Try to apply the primary policy
             result = _apply_policy(name, current_param, checkpoint_param, policy)
             updated_state[name] = result
         except WeightLoadingError as e:
-            # Primary policy failed, try fallback
             ranked_logger.warning(
                 f"Failed to apply policy: '{policy}' to '{name}': {str(e)}. Falling back to policy: '{config.fallback_policy}'."
             )

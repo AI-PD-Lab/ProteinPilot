@@ -1,3 +1,0 @@
-_target_: rfd3.metrics.losses.SequenceLoss
-weight: 0.1
-max_t: 1

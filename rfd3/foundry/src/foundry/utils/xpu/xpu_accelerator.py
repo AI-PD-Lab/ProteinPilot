@@ -82,10 +82,9 @@ class XPUAccelerator(Accelerator):
         Returns:
             Dictionary of device statistics.
         """
-        del device  # Unused
+        del device
         return {}
 
     def teardown(self) -> None:
         """Clean up XPU accelerator resources."""
-        # Empty implementation required by base class
         pass

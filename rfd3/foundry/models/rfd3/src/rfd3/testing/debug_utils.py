@@ -58,7 +58,6 @@ def to_debug_pipe(pipe):
     return pipe
 
 
-# Allows to use atom-array whenever debugging by removing friction in atoms having the same identifiers
 def save_debug_cif(atom_array, filepath, name="debug_out.cif"):
     dummy_array = atom_array.copy()
     dummy_array.chain_id = sum_string_arrays(

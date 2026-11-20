@@ -60,34 +60,11 @@ model = Proteina.from_pretrained("checkpoints/Harmonia-RFD4")
 
 HOT / COLD shift the contact count at the marked pairs by +0.80 / +0.61. **Limitations:** unconditional generation splits 54 % of designs
 (stock RFD4 69 %, RFD3 HARMONIA 36 %), and on a dense-zero Rossmann stress spec 12.5 / 25 / 7 % (full / SS-only / adjacency-only) of designs
-split. Later development checkpoints (R4: unconditional split 8 %, R5c: signed parallel / antiparallel contacts) and their code are on the
-`rfd4-harmonia` and `rfd4-harmonia-full` branches of the development history.
+split. Later development checkpoints (R4, R5c) and the training code are on the `rfd4-harmonia` and `rfd4-harmonia-full` branches of the development history.
 
 ## Files
 
-Inference (what ProteinPilot exports run):
-
 - `harmonia_ext/adj_model.py`: `HarmoniaLocalLatentsTransformer` and `register()`.
-- `harmonia_ext/adj_labels.py`: state definitions and the label derivation (block detection, contact rule, HOT / COLD).
-- `harmonia_ext/generate.py`: `install_guidance` (joint SS+ADJ guidance, optional autoguidance against a reference trunk) and the
-  panel / spec generation CLI (`python -m harmonia_ext.generate --bundle <dir> --manifest <manifest.json> --cfgs 1.5 ...`).
+- `harmonia_ext/adj_labels.py`: the state constants.
+- `harmonia_ext/generate.py`: `install_guidance`, the joint SS+ADJ guidance.
 - `harmonia_ext/rfd4_generate.py`: the `rfd4-generate` wrapper.
-
-Training and evaluation (reproduce R1-R3):
-
-- `harmonia_ext/adj_data.py`, `callbacks.py`, `train_entry.py`: training rows (PDB through RFD4's own pipeline plus SS and ADJ labels,
-  curriculum, compactness gate, dense-zero dialect), step logging, and the RFD4 trainer entry with the new modules unfrozen.
-- `harmonia_ext/make_bundle.py`: expands the released RFD4 weights with a zero `adj_embed` (the training starting point).
-- `harmonia_ext/configs/experiment/harmonia_r{1,1_full,2,3}.yaml`: the recipes (each builds on the previous); **release = `harmonia_r3`**.
-  `python -m harmonia_ext.make_bundle --src <RFD4 weights> --dst <base bundle>`, then
-  `python -m harmonia_ext.train_entry experiment=harmonia_r3 hf_ckpt_path=<base bundle> out_dir=<dir>` (add the usual RFD4 trainer overrides
-  for GPUs, batch size and workers; the runs used 2 x 64 rows per step, 8,000 steps).
-- `harmonia_ext/hotcold_score.py`: HOT/COLD effect scoring. `../rfd3/scripts/eval/` (scorer, designability, metrics) with `kit/` (natural
-  5-target panel manifest `kit/manifest.json`, reference tensors, fold-recovery scripts) is the evaluation harness behind the numbers
-  above; `generate.py` defaults to this manifest (`HARMONIA_MANIFEST` overrides).
-- `triadj_ext/`: helper modules the data and generation code import (RING-format dataset reader, optimiser glue, conditional
-  generation, design-with-contacts). They come from the TRIAD-J research code, are used unmodified, and are only the subset that
-  `harmonia_ext` imports.
-
-Training needs data that is not in this repository (a PDB mirror tar with index and the RING-format metadata the dataset reader loads;
-see `triadj_ext/ring_data.py`).

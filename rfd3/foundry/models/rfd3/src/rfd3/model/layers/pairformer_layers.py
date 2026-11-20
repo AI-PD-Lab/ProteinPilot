@@ -28,31 +28,25 @@ class AttentionPairBiasPairformerDeepspeed(nn.Module):
             nn.Sigmoid(),
         )
         self.to_a = linearNoBias(c_a, c_a)
-        # self.linear_output_project = nn.Sequential(
-        # LinearBiasInit(c_s, c_a, biasinit=-2.),
-        # nn.Sigmoid(),
-        # )
         self.ln_0 = RMSNorm((c_pair,))
-        # self.ada_ln_1 = AdaLN(c_a=c_a, c_s=c_s)
         self.ln_1 = RMSNorm((c_a,))
         self.use_deepspeed_evo = False
         self.force_bfloat16 = True
 
     def forward(
         self,
-        A_I,  # [I, C_a]
-        S_I,  # [I, C_a] | None
-        Z_II,  # [I, I, C_z]
-        Beta_II=None,  # [I, I]
+        A_I,
+        S_I,
+        Z_II,
+        Beta_II=None,
     ):
-        # Input projections
         assert S_I is None
         A_I = self.ln_1(A_I)
 
         if (self.use_deepspeed_evo or self.force_bfloat16) and A_I.device.type != "mps":
             A_I = A_I.to(torch.bfloat16)
 
-        Q_IH = self.to_q(A_I)  # / np.sqrt(self.c)
+        Q_IH = self.to_q(A_I)
         K_IH = self.to_k(A_I)
         V_IH = self.to_v(A_I)
         B_IIH = self.to_b(self.ln_0(Z_II)) + Beta_II[..., None]
@@ -62,16 +56,12 @@ class AttentionPairBiasPairformerDeepspeed(nn.Module):
 
         if not self.use_deepspeed_evo or L <= 24:
             Q_IH = Q_IH / torch.sqrt(torch.tensor(self.c).to(Q_IH.device, Q_IH.dtype))
-            # Attention
             A_IIH = torch.softmax(
                 torch.einsum("...ihd,...jhd->...ijh", Q_IH, K_IH) + B_IIH, dim=-2
-            )  # softmax over j
-            ## G_IH: [I, H, C]
-            ## A_IIH: [I, I, H]
-            ## V_IH: [I, H, C]
+            )
             A_I = torch.einsum("...ijh,...jhc->...ihc", A_IIH, V_IH)
-            A_I = G_IH * A_I  # [B, I, H, C]
-            A_I = A_I.flatten(start_dim=-2)  # [B, I, Ca]
+            A_I = G_IH * A_I
+            A_I = A_I.flatten(start_dim=-2)
         else:
             raise NotImplementedError
 
@@ -100,8 +90,6 @@ class PairformerBlock(nn.Module):
     ):
         super().__init__()
 
-        # self.drop_row = Dropout(broadcast_dim=-2, p_drop=p_drop)
-        # self.drop_col = Dropout(broadcast_dim=-3, p_drop=p_drop)
 
         self.z_transition = Transition(c=c_z, n=n_transition)
 

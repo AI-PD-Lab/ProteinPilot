@@ -48,13 +48,11 @@ class AF3Scheduler(_LRScheduler):
 
     def get_lr(self) -> list[float]:
         if self.last_epoch < self.warmup_steps:
-            # Linear warmup
             return [
                 self.base_lr * (self.last_epoch / self.warmup_steps)
                 for _ in self.optimizer.param_groups
             ]
         else:
-            # Decay after warmup
             num_decays = (self.last_epoch - self.warmup_steps) // self.decay_steps
             return [
                 self.base_lr * (self.decay_factor**num_decays)

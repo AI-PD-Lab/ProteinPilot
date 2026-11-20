@@ -7,11 +7,6 @@ from foundry.utils.ddp import RankedLogger
 global_logger = RankedLogger(__name__, rank_zero_only=False)
 
 
-#################################################################################
-# Training sample conditioning utilities
-#################################################################################
-
-
 def sample_island_tokens(
     array_length,
     island_len_min=5,
@@ -46,38 +41,30 @@ def sample_island_tokens(
                 break
             remaining = max_length - current_total
         else:
-            remaining = None  # not used
+            remaining = None
 
-        # Randomly select a candidate island length.
         candidate_length = np.random.randint(island_len_min, island_len_max + 1)
-        candidate_length = min(candidate_length, array_length)  # Fit into array
+        candidate_length = min(candidate_length, array_length)
 
-        # Choose a random starting index ensuring the island fits.
         high_start = array_length - candidate_length
         start = np.random.randint(0, high_start + 1)
 
-        # Evaluate the segment that would be activated.
         segment = mask[start : start + candidate_length]
         new_trues = np.sum(~segment)
 
-        # If we have a maximum True budget and adding all new positions would exceed it, adjust the island.
         if max_length is not None and new_trues > remaining:
-            # We try to trim the island so that it adds at most `remaining` new True values.
             count_new = 0
             adjusted_length = 0
             for i in range(candidate_length):
                 if not mask[start + i]:
                     count_new += 1
                 adjusted_length += 1
-                # Once we've added as many new trues as allowed, break.
                 if count_new >= remaining:
                     break
-            # Only add the island if its adjusted length meets the minimum requirement.
             if adjusted_length < island_len_min:
-                continue  # Skip this island and try the next one.
+                continue
             mask[start : start + adjusted_length] = True
         else:
-            # No max constraint or this candidate island fits within the remaining budget.
             mask[start : start + candidate_length] = True
 
     assert mask.sum() <= array_length, "Generated mask exceeds array length."
@@ -99,7 +86,6 @@ def sample_subgraph_atoms(
     if random_condition(p_fix_all):
         return np.ones(subarray.array_length(), dtype=bool)
 
-    # ... Create graph from subarray
     G = _atom_array_to_networkx_graph(
         subarray,
         annotations=["atom_name"],
@@ -107,17 +93,13 @@ def sample_subgraph_atoms(
         cast_aromatic_bonds_to_same_type=True,
     )
 
-    # ... Determine if subarray is a residue
     is_protein = subarray.is_protein.all()
 
-    # ... Choose a seed atom
     if random_condition(p_seed_furthest_from_o) and is_protein:
         seed_atom = choose_furthest_from_oxygen(G)
     else:
         seed_atom = choose_uniformly_random_atom_name(subarray)
 
-    # ... Sample atoms within n bonds
-    # sample bonded fragment to show as motif from geom. distribution
     p = 1 / (1 + n_bond_expectation)
     n_bonds = np.random.geometric(p=p) - 1
     atom_names = get_atom_names_within_n_bonds(
@@ -126,11 +108,6 @@ def sample_subgraph_atoms(
     is_motif_atom = np.isin(subarray.atom_name, atom_names)
 
     return is_motif_atom
-
-
-#################################################################################
-# Graph traversal utilities  |  assume each node has "atom_name" attribute
-#################################################################################
 
 
 def get_node_idx_from_atom_name(G, atom_name):
@@ -176,16 +153,9 @@ def choose_furthest_from_oxygen(G):
 def choose_uniformly_random_atom_name(subarray):
     valid_indices = np.where(subarray.occupancy > 0)[0]
     if len(valid_indices) == 0:
-        # raise ValueError("No atoms with occupancy > 0")
-        # global_logger.warning("No atoms with occupancy > 0")
         valid_indices = np.arange(subarray.array_length())
     sampled_idx = np.random.choice(valid_indices)
     return subarray.atom_name[sampled_idx]
-
-
-#################################################################################
-# Utility functions
-#################################################################################
 
 
 def random_condition(p_cond):

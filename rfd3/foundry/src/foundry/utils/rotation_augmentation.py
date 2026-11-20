@@ -33,12 +33,10 @@ def centre_random_augmentation(X_L, X_exists_L, s_trans):
 
 
 def uniform_random_rotation(size):
-    # Sample random angles for rotations around X, Y, and Z axes
     theta_x = torch.rand(size) * 2 * math.pi
     theta_y = torch.rand(size) * 2 * math.pi
     theta_z = torch.rand(size) * 2 * math.pi
 
-    # Calculate the cosines and sines of the angles
     cos_x = torch.cos(theta_x)
     sin_x = torch.sin(theta_x)
     cos_y = torch.cos(theta_y)
@@ -46,7 +44,6 @@ def uniform_random_rotation(size):
     cos_z = torch.cos(theta_z)
     sin_z = torch.sin(theta_z)
 
-    # Create the rotation matrices around X, Y, and Z axes
     rotation_x = torch.stack(
         [torch.tensor([[1, 0, 0], [0, c, -s], [0, s, c]]) for c, s in zip(cos_x, sin_x)]
     )
@@ -59,7 +56,6 @@ def uniform_random_rotation(size):
         [torch.tensor([[c, -s, 0], [s, c, 0], [0, 0, 1]]) for c, s in zip(cos_z, sin_z)]
     )
 
-    # Combine the rotation matrices
     rotation_matrix = torch.matmul(rotation_z, torch.matmul(rotation_y, rotation_x))
 
     return rotation_matrix

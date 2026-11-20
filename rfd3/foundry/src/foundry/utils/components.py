@@ -17,11 +17,6 @@ sequence_encoding = AF3SequenceEncoding()
 _aa_like_res_names = sequence_encoding.all_res_names[sequence_encoding.is_aa_like]
 
 
-#################################################################################
-# Component / contig parsing
-#################################################################################
-
-
 class ComponentValidationError(ValueError):
     """Raised when contig/component inputs cannot be parsed or validated."""
 
@@ -91,16 +86,14 @@ def get_design_pattern_with_constraints(contig, length=None):
     """
     contig_parts = contig.split(",")
 
-    # Separate fixed segments (e.g., "A1051-1051") and variable ranges (e.g., "0-40")
     variable_ranges = []
     fixed_parts = []
     pos_to_put_motif = []
 
-    suff = []  # suffixes for diffused regions P(optional),R,D
+    suff = []
 
     for part in contig_parts:
-        ## updating to include DNA and RNA generation
-        if part[-1] in ["R", "D"]:  ##Detect non-fixed RNA and DNA contig part
+        if part[-1] in ["R", "D"]:
             suff.append(part[-1])
             part = part[:-1]
             if "-" in part:
@@ -110,7 +103,7 @@ def get_design_pattern_with_constraints(contig, length=None):
             variable_ranges.append([start, end])
             pos_to_put_motif.append(0)
 
-        elif any(c.isalpha() for c in part):  # Detect parts containing letters as fixed
+        elif any(c.isalpha() for c in part):
             pn_unit_id, pn_unit_start, pn_unit_end = extract_pn_unit_info(part)
             fixed_parts.append([pn_unit_id, pn_unit_start, pn_unit_end])
             pos_to_put_motif.append(1)
@@ -125,7 +118,6 @@ def get_design_pattern_with_constraints(contig, length=None):
             pos_to_put_motif.append(0)
             suff.append("P")
 
-    # adjust the total length to solely for free residues
     num_motif_residues = sum([i[2] - i[1] + 1 for i in fixed_parts])
 
     if length is None:
@@ -147,7 +139,6 @@ def get_design_pattern_with_constraints(contig, length=None):
         min_value = range_limits[0]
         max_value = range_limits[1]
 
-        # Calculate the valid range for the current segment
         valid_min = max(
             min_value,
             remaining_length_min
@@ -164,11 +155,9 @@ def get_design_pattern_with_constraints(contig, length=None):
                 "No valid selections possible with the given constraints."
             )
 
-        # Randomly select a value for the current segment
         selected_value = random.randint(valid_min, valid_max)
         num_free_atoms.append(selected_value)
 
-        # Update remaining lengths
         remaining_length_min -= selected_value
         remaining_length_max -= selected_value
 
@@ -210,15 +199,12 @@ def get_motif_components_and_breaks(unindexed_contig, index_all=False):
     contig_parts = unindexed_contig.split(",")
     for part in contig_parts:
         if any(c.isalpha() for c in part):
-            # ... Parse possibilities: A11 | A11-12 | A11-11
             pn_unit_id, pn_unit_start, pn_unit_end = extract_pn_unit_info(part)
 
             if pn_unit_start == pn_unit_end:
-                # ... For single residues, append and break
                 components.append(f"{pn_unit_id}{pn_unit_start}")
                 breaks.append(True)
             else:
-                # ... For multiple residues, break and then append without breaks
                 for index in range(pn_unit_start, pn_unit_end + 1):
                     components.append(f"{pn_unit_id}{index}")
                     if index == pn_unit_start:
@@ -237,16 +223,11 @@ def get_motif_components_and_breaks(unindexed_contig, index_all=False):
             components.append(part)
             breaks.append(None)
 
-    breaks[0] = True  # Decouple unindexed region from global index
+    breaks[0] = True
     if index_all:
         global_logger.info("Unindexing all residues")
         breaks = [(False if b is not None else None) for b in breaks]
     return components, breaks
-
-
-#################################################################################
-# Mask getters
-#################################################################################
 
 
 def get_name_mask(
@@ -330,8 +311,6 @@ def get_name_mask(
             )
         )
     if mask.sum() % len(names) != 0:
-        # for the case where source_names are originated from multiple residues with the same names
-        # (e.g. two ORO ligands in the input pdb: {ligand: "ORO", fixed_atoms: {ORO:"N3,C2,C4,N1"}})
         raise ComponentValidationError(
             "Number of atoms must be a multiple of the requested names.",
             details={
@@ -401,11 +380,9 @@ def unravel_components(
     if "," in v or "-" in v:
         components.extend(get_design_pattern_with_constraints(v))
     else:
-        # Safely canonicalize to single component
         mask = fetch_mask_from_component(v, atom_array=atom_array)
         if mask.sum() > 0:
             res_ids, chain_ids = atom_array.res_id[mask], atom_array.chain_id[mask]
-            # assert unique resids for component
             if len(set(zip(chain_ids, res_ids))) != 1:
                 if not allow_multiple_matches:
                     raise ComponentValidationError(
@@ -417,7 +394,7 @@ def unravel_components(
                         f"Component '{v}' maps to multiple residues. If you are using Symmetry this is OK."
                     )
                     components.extend([f"{c}{r}" for c, r in zip(chain_ids, res_ids)])
-                    components = list(set(components))  # unique components
+                    components = list(set(components))
                     return components
             res_id, chain_id = res_ids[0], chain_ids[0]
 

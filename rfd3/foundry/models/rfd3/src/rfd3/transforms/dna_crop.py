@@ -33,18 +33,15 @@ def protein_dna_contact_contiguous_crop_mask(
         atom_array, protein_contact_atoms, dna_contact_atoms, contact_dist_cutoff
     )
 
-    # total_protein_expand = np.random.randint(protein_expand_min, protein_expand_max)
     left = np.random.randint(protein_expand_min, protein_expand_max)
     right = np.random.randint(protein_expand_min, protein_expand_max)
     protein_keep_mask = expand_connected_component_mask(
         atom_array, prot_contact, left, right
     )
 
-    # total_dna_expand = np.random.randint(dna_expand_min, dna_expand_max)
     left = np.random.randint(dna_expand_min, dna_expand_max)
     right = np.random.randint(dna_expand_min, dna_expand_max)
     dna_keep_mask = get_dna_mask(atom_array, dna_contact, left, right)
-    # count keep protein token num and dna token num
 
     mask = np.logical_or(protein_keep_mask, dna_keep_mask)
 
@@ -147,15 +144,12 @@ def create_residue_mask(atom_array, first_atom_indices):
     numpy.ndarray
         Boolean mask that can be used to select all atoms of the specified residues
     """
-    # Get target residue IDs and chain IDs as 2D arrays
     target_res_ids = atom_array.res_id[first_atom_indices][:, np.newaxis]
     target_chain_ids = atom_array.chain_id[first_atom_indices][:, np.newaxis]
 
-    # Use broadcasting to create masks for all residues at once
     res_match = atom_array.res_id == target_res_ids
     chain_match = atom_array.chain_id == target_chain_ids
 
-    # Combine the matches
     mask = (res_match & chain_match).any(axis=0)
 
     return mask
@@ -303,25 +297,19 @@ def fill_nan_coords_with_random(atoms, min_val=-50, max_val=50, seed=None):
     biotite.structure.AtomArray
         A new AtomArray with NaN coordinates filled
     """
-    # Create a copy to avoid modifying the original
     filled_atoms = atoms.copy()
 
-    # Set random seed if provided
     if seed is not None:
         np.random.seed(seed)
 
-    # Get the coordinate array
     coords = filled_atoms.coord
 
-    # Find indices of NaN values
     nan_mask = np.isnan(coords)
 
-    # Generate random values for NaN positions
     random_coords = np.random.uniform(
         low=min_val, high=max_val, size=coords[nan_mask].shape
     )
 
-    # Fill NaN values with random coordinates
     coords[nan_mask] = random_coords
 
     return filled_atoms
@@ -435,21 +423,14 @@ def base_pairs(atom_array, min_atoms_per_base=3, unique=True):
         np.isin(atom_array.res_name, ["DA", "DG", "DT", "DC"]),
     )
 
-    # Get the nucleotides for the given atom_array
-    # Disregard the phosphate-backbone
     non_phosphate_boolean = ~np.isin(
         atom_array.atom_name, ["O5'", "P", "OP1", "OP2", "OP3", "HOP2", "HOP3"]
     )
 
-    # Combine the two boolean masks
     boolean_mask = np.logical_and(non_phosphate_boolean, dna_boolean)
 
-    # Get only nucleosides
     nucleosides = atom_array[boolean_mask]
 
-    # Get the base pair candidates according to a N/O cutoff distance,
-    # where each base is identified as the first index of its respective
-    # residue
     n_o_mask = np.isin(nucleosides.element, ["N", "O"])
 
     nucleosides = fill_nan_coords_with_random(nucleosides)
@@ -457,16 +438,11 @@ def base_pairs(atom_array, min_atoms_per_base=3, unique=True):
         nucleosides, n_o_mask, 3.6
     )
 
-    # Contains the plausible base pairs
     basepairs = []
-    # Contains the number of hydrogens for each plausible base pair
     basepairs_hbonds = []
 
-    # Get the residue masks for each residue
     base_masks = get_residue_masks(nucleosides, basepair_candidates.flatten())
 
-    # Group every two masks together for easy iteration (each 'row' is
-    # respective to a row in ``basepair_candidates``)
     base_masks = base_masks.reshape(
         (basepair_candidates.shape[0], 2, nucleosides.shape[0])
     )
@@ -479,12 +455,8 @@ def base_pairs(atom_array, min_atoms_per_base=3, unique=True):
 
         hbonds = _check_dssr_criteria((base1, base2), min_atoms_per_base, unique)
 
-        # If no hydrogens are present use the number N/O pairs to
-        # decide between multiple pairing possibilities.
 
         if hbonds is None:
-            # Each N/O-pair is detected twice. Thus, the number of
-            # matches must be divided by two.
             hbonds = n_o_pairs / 2
         if hbonds != -1:
             basepairs.append((base1_index, base2_index))
@@ -494,28 +466,19 @@ def base_pairs(atom_array, min_atoms_per_base=3, unique=True):
     basepair_array = np.array(basepairs)
 
     if unique:
-        # Contains all non-unique base pairs that are flagged to be
-        # removed
         to_remove = []
 
-        # Get all bases that have non-unique pairing interactions
         base_indices, occurrences = np.unique(basepairs, return_counts=True)
         for base_index, occurrence in zip(base_indices, occurrences):
             if occurrence > 1:
-                # Write the non-unique base pairs to a dictionary as
-                # 'index: number of hydrogen bonds'
                 remove_candidates = {}
                 for i, row in enumerate(np.asarray(basepair_array == base_index)):
                     if np.any(row):
                         remove_candidates[i] = basepairs_hbonds[i]
-                # Flag all non-unique base pairs for removal except the
-                # one that has the most hydrogen bonds
                 del remove_candidates[max(remove_candidates, key=remove_candidates.get)]
                 to_remove += list(remove_candidates.keys())
-        # Remove all flagged base pairs from the output `ndarray`
         basepair_array = np.delete(basepair_array, to_remove, axis=0)
 
-    # Remap values to original atom array
     if len(basepair_array) > 0:
         basepair_array = np.where(boolean_mask)[0][basepair_array]
         for i, row in enumerate(basepair_array):

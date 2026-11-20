@@ -34,13 +34,11 @@ def simplified_processing_atom_array(atom_arrays, central_atom="CB", threshold=0
         for start, end in zip(res_start_indices, res_end_indices):
             cur_res_atom_array = atom_array[start:end]
 
-            # Check if the current residue is after padding (seq unknown):
             if_seq_known = not any(
                 atom_name.startswith("V") for atom_name in cur_res_atom_array.atom_name
             )
 
             if not if_seq_known:
-                # Glycine fallback to CA
                 CA_coord = cur_res_atom_array.coord[
                     cur_res_atom_array.atom_name == "CA"
                 ]
@@ -125,31 +123,26 @@ def calculate_hbond_stats(
     for input_atom_array, output_atom_array in zip(
         input_atom_array_stack, output_atom_array_stack
     ):
-        # Ensure required annotations exist
         for annotation in ["active_donor", "active_acceptor"]:
             if annotation not in input_atom_array.get_annotation_categories():
                 input_atom_array.set_annotation(
                     annotation, np.zeros(len(input_atom_array), dtype=bool)
                 )
 
-        # Skip samples with no donors or acceptors
         if (
             np.sum(input_atom_array.active_donor) == 0
             and np.sum(input_atom_array.active_acceptor) == 0
         ):
             continue
 
-        # Clean up coordinate annotations
         for atom_array in [input_atom_array, output_atom_array]:
             if "coord_to_be_noised" in atom_array.get_annotation_categories():
                 atom_array.del_annotation("coord_to_be_noised")
 
-        # Calculate hydrogen bonds
         output_atom_array, hbonds, motif_diffused_hbond_count = calculate_hbonds(
             output_atom_array,
         )
 
-        # Update hbond annotations for motif atoms only
         hbond_types = np.vstack(
             (output_atom_array.active_donor, output_atom_array.active_acceptor)
         ).T
@@ -160,7 +153,6 @@ def calculate_hbond_stats(
         output_atom_array.set_annotation("active_donor", hbond_types[:, 0])
         output_atom_array.set_annotation("active_acceptor", hbond_types[:, 1])
 
-        # Count correct predictions
         correct_donors = _count_correct_hbond_atoms(
             input_atom_array, output_atom_array, "active_donor"
         )
@@ -168,7 +160,6 @@ def calculate_hbond_stats(
             input_atom_array, output_atom_array, "active_acceptor"
         )
 
-        # Calculate percentages
         given_donors = np.sum(input_atom_array.active_donor)
         given_acceptors = np.sum(input_atom_array.active_acceptor)
 
@@ -177,7 +168,6 @@ def calculate_hbond_stats(
             correct_acceptors / given_acceptors if given_acceptors > 0 else 1.0
         )
 
-        # Accumulate totals
         total_correct_donors_percent += correct_donor_pct
         total_correct_acceptors_percent += correct_acceptor_pct
         total_number_donors_acceptors += np.sum(hbond_types)
@@ -210,7 +200,6 @@ def calculate_hbond_stats(
             "output_atom_array": output_atom_array,
         }
 
-    # Return results
     if num_valid_samples == 0:
         return 0, 0, 0
 

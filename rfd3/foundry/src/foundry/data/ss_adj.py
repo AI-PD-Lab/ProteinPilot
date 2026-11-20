@@ -26,51 +26,19 @@ import biotite.structure as struc
 import numpy as np
 from biotite.structure import AtomArray
 
-# RFD1-compatible SS encoding
-SS_HELIX = 0.0  # biotite 'a': alpha-helix (DSSP H, G, I)
-SS_STRAND = 1.0  # biotite 'b': beta-strand  (DSSP E, B)
-SS_LOOP = 2.0  # biotite 'c': coil / loop   (DSSP T, S, C, ' ')
-SS_MASKED = 3.0  # dropout sentinel — NEVER stored in LMDB or precomputed files
+SS_HELIX = 0.0
+SS_STRAND = 1.0
+SS_LOOP = 2.0
+SS_MASKED = 3.0
 
-# ---------------------------------------------------------------------------
-# Block types.
-#
-# Adjacency was originally protein-only: a "block" was a run of DSSP H/E/L and a
-# contact was Cbeta < 6 A. Ligands and nucleic acids have no secondary structure,
-# and _get_ss_training defaults every token to SS_LOOP -- so before block types
-# existed, every ligand atom and nucleotide was treated as a loop, which routed
-# them into the loop branch and (with loop_adj=False) left the pair at 0, i.e.
-# an ACTIVE "explicitly non-adjacent" embedding. Protein-ligand is ~30% of the
-# interface training set, so that mislabelled a third of the data.
-#
-# These are block types, not SS labels: they never reach SSAdapter (which stays a
-# 4-state helix/strand/loop/masked embedding). They only select the segmentation
-# and contact rule below.
 BLOCK_HELIX = 0
 BLOCK_STRAND = 1
 BLOCK_LOOP = 2
-BLOCK_NA = 3       # nucleic acid, before ds/ss is resolved (see na_duplex_blocks)
-BLOCK_LIGAND = 4   # non-polymer, branched (glycans), macrolide
-# Nucleic acid split by LOCAL pairing state rather than by secondary-structure
-# class. Classifying stems / hairpins / bulges / junctions needs a global SS graph,
-# which pseudoknots break by construction -- and pseudoloops can span vast
-# distances, so the class label says little about local geometry. A per-nucleotide
-# "is it base-paired right now" test needs no graph, and a pseudoknotted helix is
-# simply another stem that gets its own helical-turn blocks.
-BLOCK_NA_DS = 5    # base-paired: rigid duplex, blocked by helical turn, spans both strands
-BLOCK_NA_SS = 6    # unpaired: flexible (hairpin / bulge / junction / ss overhang)
+BLOCK_NA = 3
+BLOCK_LIGAND = 4
+BLOCK_NA_DS = 5
+BLOCK_NA_SS = 6
 
-# Contact rule per unordered pair of block types:
-#     (atoms, cutoff_A, min_contact_pairs)
-#
-# `cbeta` is only meaningful between protein blocks -- it is a side-chain proxy
-# for "these two elements pack", and RFD1's 6 A is calibrated for exactly that.
-# Ligand and nucleic-acid contacts are direct van der Waals interactions, which
-# are conventionally called at 4-5 A between heavy atoms; using 6 A there would
-# mark mere neighbours as contacts and make the conditioning meaningless.
-#
-# Multiplicity mirrors the existing loop rule: a rigid element touching at one
-# point is a contact, a floppy one brushing past is not.
 _PROTEIN_BLOCKS = (BLOCK_HELIX, BLOCK_STRAND, BLOCK_LOOP)
 
 DEFAULT_CONTACT_RULES: dict[tuple[int, int], tuple[str, float, int]] = {}
@@ -84,8 +52,6 @@ _NA_BLOCKS = (BLOCK_NA, BLOCK_NA_DS, BLOCK_NA_SS)
 for _p in _PROTEIN_BLOCKS:
     DEFAULT_CONTACT_RULES[tuple(sorted((_p, BLOCK_LIGAND)))] = ("heavy", 4.5, 1)
 for _n in _NA_BLOCKS:
-    # ss is flexible, so it gets the same treatment as a protein loop: a single
-    # nucleotide brushing past is not an interface, require several contacts.
     _mp = 3 if _n == BLOCK_NA_SS else 2
     for _p in _PROTEIN_BLOCKS:
         DEFAULT_CONTACT_RULES[tuple(sorted((_p, _n)))] = ("heavy", 5.0, _mp)
@@ -95,29 +61,10 @@ for _n in _NA_BLOCKS:
         DEFAULT_CONTACT_RULES[tuple(sorted((_n, _m)))] = ("heavy", 5.0, _mp2)
 DEFAULT_CONTACT_RULES[(BLOCK_LIGAND, BLOCK_LIGAND)] = ("heavy", 4.5, 1)
 
-# Max residues per loop sub-block. A contiguous coil run can be 25+ residues; as a
-# single block one incidental contact marks the whole thing adjacent and the
-# conditioning becomes uselessly coarse. H/E need no such split -- their length is
-# naturally bounded.
 LOOP_SUBBLOCK_MAX = 8
-# Nucleotides per block for UNPAIRED nucleic acid (single strands, hairpin loops,
-# bulges, junctions). Paired regions are blocked by helical turn instead -- see
-# BP_PER_HELICAL_TURN.
 NA_BLOCK_SIZE = 4
 
-# Base pairs per block in a duplex. One helical turn is the natural recognition
-# unit: a protein recognition helix inserts into ONE major groove, and a turn runs
-# from one major groove to the next. B-DNA is ~10.5 bp/turn, A-form RNA ~11.
-#
-# Crucially a duplex block spans BOTH strands. A protein reads a base pair, not a
-# single-strand segment, so per-chain windows would make "this helix contacts NA
-# block X" refer to only half the groove.
 BP_PER_HELICAL_TURN = 10
-
-
-# ---------------------------------------------------------------------------
-# DSSP label extraction
-# ---------------------------------------------------------------------------
 
 
 def get_ss_labels(
@@ -153,20 +100,13 @@ def get_ss_labels(
             raise ValueError("chain_order produced no chains")
         structure = struc.concatenate(parts)
 
-    # annotate_sse returns one label per residue: 'a', 'b', or 'c'
-    sse_per_res = struc.annotate_sse(structure)  # [L_res]
+    sse_per_res = struc.annotate_sse(structure)
 
     ss = np.full(len(sse_per_res), SS_LOOP, dtype=np.float32)
     ss[sse_per_res == "a"] = SS_HELIX
     ss[sse_per_res == "b"] = SS_STRAND
-    # 'c' and anything else stays SS_LOOP (already filled)
 
     return ss
-
-
-# ---------------------------------------------------------------------------
-# Backbone coordinate helpers
-# ---------------------------------------------------------------------------
 
 
 def _get_ca_coords(structure: AtomArray, ss_labels: np.ndarray) -> np.ndarray:
@@ -223,7 +163,6 @@ def _reconstruct_cb(backbone: np.ndarray) -> np.ndarray:
     return (-0.57910144 * a + 0.5689693 * b - 0.5441217 * c_vec + ca).astype(np.float32)
 
 
-
 def block_types_from_token_array(
     atom_array, token_starts: np.ndarray, ss_labels: np.ndarray
 ) -> np.ndarray:
@@ -244,7 +183,7 @@ def block_types_from_token_array(
     try:
         ctype = np.asarray(atom_array.chain_type)[token_starts]
     except AttributeError:
-        return out  # no chain_type annotation -> protein-only behaviour
+        return out
 
     na_types = {
         int(ChainType.DNA), int(ChainType.RNA),
@@ -299,11 +238,11 @@ def _segment_blocks_typed(
         t = int(block_types[run[0]])
         if t == BLOCK_LOOP:
             if exclude_terminal_loops and (r_i == 0 or r_i == len(runs) - 1):
-                continue  # disordered tails: their "contacts" are coordinate noise
+                continue
             step = max(1, loop_subblock_max)
         elif t == BLOCK_NA:
             if skip_na:
-                continue  # handled by na_duplex_blocks (helical turns, both strands)
+                continue
             step = max(1, na_block_size)
         else:
             step = len(run)
@@ -334,11 +273,6 @@ def _segment_blocks(ss_labels: np.ndarray) -> list[np.ndarray]:
     return blocks
 
 
-# ---------------------------------------------------------------------------
-# ADJ matrix — standard pipeline  (Pipeline 1, RFD1 compatible)
-# ---------------------------------------------------------------------------
-
-
 def get_adj_matrix_standard(
     structure: AtomArray,
     ss_labels: np.ndarray,
@@ -358,11 +292,6 @@ def get_adj_matrix_standard(
         cb_coords=cb_coords,
         cb_threshold=cb_threshold,
     )
-
-
-# ---------------------------------------------------------------------------
-# ADJ matrix — loop submodule  (Pipeline 2)
-# ---------------------------------------------------------------------------
 
 
 def get_adj_matrix_loop(
@@ -389,12 +318,6 @@ def get_adj_matrix_loop(
         ca_threshold_loop=ca_threshold_loop,
         min_loop_contact_pairs=min_loop_contact_pairs,
     )
-
-
-# ---------------------------------------------------------------------------
-# Coord-based ADJ helpers (used when AtomArray residue counting is unreliable,
-# e.g. after PadTokensWithVirtualAtoms inserts extra residues)
-# ---------------------------------------------------------------------------
 
 
 def _adj_blocks_from_coords(
@@ -427,14 +350,6 @@ def _adj_blocks_from_coords(
 
             if is_loop1 or is_loop2:
                 if not loop_adj:
-                    # RFD1 MASKS these, it does not call them non-adjacent.
-                    # BlockAdjacency.mask_ss_adj sets adj[~expanded_mask] = 2 for
-                    # loops/insertions ("adj: block adjacency with equivalent
-                    # masking as ss"). Leaving them at 0 declares "these blocks are
-                    # explicitly NOT in contact" for ~half the residues in the
-                    # structure, while they are frequently packed against their
-                    # neighbours -- which is both wrong as a label and dangerous for
-                    # any loss term that treats 0 as a supervised negative.
                     if mask_loop_pairs:
                         adj[np.ix_(b1, b2)] = 2.0
                         adj[np.ix_(b2, b1)] = 2.0
@@ -471,8 +386,6 @@ def _adj_blocks_from_coords(
     return adj
 
 
-
-
 def na_duplex_blocks(
     atom_array,
     token_starts: np.ndarray,
@@ -494,7 +407,6 @@ def na_duplex_blocks(
     if na_tok.size == 0:
         return [], []
 
-    # residue index (into atom_array residues) -> token index
     try:
         import biotite.structure as struc
 
@@ -505,10 +417,6 @@ def na_duplex_blocks(
 
     partner: dict[int, int] = {}
     if pairs is not None and len(pairs):
-        # NOTE: biotite's docstring says base_pairs returns "indices of the
-        # residues", but it actually returns ATOM indices (verified on 1BNA:
-        # values up to 464 for a 24-residue, 486-atom duplex). Map atom -> token
-        # by locating the enclosing token span.
         ts = np.asarray(token_starts)
         for a1, a2 in np.asarray(pairs, dtype=np.int64):
             t1 = int(np.searchsorted(ts, a1, side="right") - 1)
@@ -523,7 +431,6 @@ def na_duplex_blocks(
     btypes: list[int] = []
     paired = set(partner)
 
-    # --- duplex: walk stems (i ascending while its partner descends) ---
     consumed: set[int] = set()
     for t in sorted(paired):
         if t in consumed:
@@ -548,7 +455,6 @@ def na_duplex_blocks(
             blocks.append(np.asarray(both, dtype=np.int64))
             btypes.append(BLOCK_NA_DS)
 
-    # --- unpaired: contiguous runs, windowed ---
     unpaired = [t for t in na_tok if t not in paired]
     if unpaired:
         run = [unpaired[0]]
@@ -594,10 +500,6 @@ def adj_from_block_types(
         t1 = types[i]
         for j in range(i + 1, len(blocks)):
             b2, t2 = blocks[j], types[j]
-            # Respect loop_adj even in the typed path. The rule table HAS loop
-            # entries, so without this check turning on typed_blocks (for ligands
-            # and nucleic acids) would silently also enable loop adjacency -- a much
-            # larger label change, staged separately. Masked, never 0.
             if not loop_adj and BLOCK_LOOP in (t1, t2):
                 if mask_unruled:
                     adj[np.ix_(b1, b2)] = 2.0
@@ -624,7 +526,7 @@ def adj_from_block_types(
                     c1[v1][:, None, :] - c2[v2][None, :, :], axis=-1
                 )
                 n_close = int((d < cutoff).sum())
-            else:  # heavy-atom minimum over all atoms of both blocks
+            else:
                 if token_atom_coords is None:
                     if mask_unruled:
                         adj[np.ix_(b1, b2)] = 2.0
@@ -646,8 +548,6 @@ def adj_from_block_types(
                 adj[np.ix_(b1, b2)] = 1.0
                 adj[np.ix_(b2, b1)] = 1.0
 
-    # Tokens in no block at all (e.g. excluded terminal loops) are unspecified,
-    # not non-adjacent.
     in_block = np.zeros(n_tokens, dtype=bool)
     for b in blocks:
         in_block[b] = True
@@ -694,10 +594,6 @@ def get_adj_from_token_array(
     cb_coords = _reconstruct_cb(backbone)
 
     if typed_blocks:
-        # Molecule-type-aware path: protein keeps RFD1 C-beta/6 A, ligands and
-        # nucleic acids get heavy-atom rules (see DEFAULT_CONTACT_RULES). Without
-        # this everything non-protein inherits SS_LOOP and is routed through the
-        # protein loop rule.
         block_types = block_types_from_token_array(atom_array, token_starts, ss_labels)
         try:
             chain_ids = atom_array.chain_iid[token_starts]
@@ -708,11 +604,6 @@ def get_adj_from_token_array(
         blocks = blocks + na_blocks
         types = types + na_types
 
-        # Heavy-atom coordinates grouped per token, for the 'heavy' rules.
-        # Vectorised: the obvious form (a dict loop assigning tok_of_atom, then a
-        # boolean mask per token) is two O(n_tokens * n_atoms) passes and measured
-        # 1.29 ms/example at crop scale -- ~1.7 min per epoch of pure Python at
-        # 2400 steps x 32. Sorting once and slicing is 0.07 ms, output identical.
         tok_of_atom = np.array(
             [token_id_to_idx.get(int(t), -1) for t in atom_array.token_id],
             dtype=np.int64,
@@ -740,11 +631,6 @@ def get_adj_from_token_array(
     )
 
 
-# ---------------------------------------------------------------------------
-# Unified dispatcher
-# ---------------------------------------------------------------------------
-
-
 def get_ss_adj(
     structure: AtomArray,
     chain_order: list[str] | None = None,
@@ -763,11 +649,6 @@ def get_ss_adj(
     else:
         adj = get_adj_matrix_standard(structure, ss, **kwargs)
     return ss, adj
-
-
-# ---------------------------------------------------------------------------
-# LMDB serialization
-# ---------------------------------------------------------------------------
 
 
 def pack_ss(arr: np.ndarray) -> bytes:

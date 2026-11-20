@@ -1,9 +1,7 @@
-# fmt: off
-# ... For convenience, define BKBN, or TIP to be used as a shortcut | TIP is the largest set of fixed atom given at least 2 tip atoms
 TIP_BY_RESTYPE = {
-    "TRP": ["CG","CD1","CD2","NE1","CE2","CE3","CZ2","CZ3","CH2"],  # fix both rings
-    "HIS": ["CG","ND1","CD2","CE1","NE2"],  # fixed ring
-    "TYR": ["CZ","OH"],  # keeps ring dihedral flexible
+    "TRP": ["CG","CD1","CD2","NE1","CE2","CE3","CZ2","CZ3","CH2"],
+    "HIS": ["CG","ND1","CD2","CE1","NE2"],
+    "TYR": ["CZ","OH"],
     "PHE": ["CG","CD1","CD2","CE1","CE2","CZ"],
     "ASN": ["CB", "CG","OD1","ND2"],
     "ASP": ["CB", "CG","OD1","OD2"],
@@ -25,4 +23,3 @@ TIP_BY_RESTYPE = {
     "MSK": None
 }
 
-# fmt: on

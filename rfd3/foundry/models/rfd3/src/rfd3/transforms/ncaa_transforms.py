@@ -68,11 +68,9 @@ class RandomlyMirrorInputs(Transform):
             else:
                 r_j = res_starts[i + 1]
 
-            # case 1: standard AA
             resname = atom_array.res_name[r_i]
             if resname in TWO_WAY_MIRROR_IMAGE_MAPPING:
                 atom_array.res_name[r_i:r_j] = TWO_WAY_MIRROR_IMAGE_MAPPING[resname]
-            # case 2: non-standard AA or ligand with >=4 atoms
             elif r_j - r_i >= 3:
                 if resname in renamed_map:
                     newname = renamed_map[resname]
@@ -81,12 +79,10 @@ class RandomlyMirrorInputs(Transform):
                     renamed_map[resname] = newname
                 atom_array.res_name[r_i:r_j] = newname
 
-        # flip coords about Z
         atom_array.coord = atom_array.coord * np.array([1, 1, -1.0])
 
         xyz = data.get("coord_atom_lvl_to_be_noised", None)
         if xyz is not None:
-            # flip coords about Z
             data["coord_atom_lvl_to_be_noised"] = xyz * torch.tensor(
                 [1, 1, -1], dtype=xyz.dtype, device=xyz.device
             )
@@ -96,7 +92,6 @@ class RandomlyMirrorInputs(Transform):
             else None
         )
         if ground_truth_coord is not None:
-            # flip coords about Z
             data["ground_truth"]["coord_atom_lvl"] = ground_truth_coord * torch.tensor(
                 [1, 1, -1],
                 dtype=ground_truth_coord.dtype,
@@ -116,14 +111,10 @@ class AddIsDAminoAcidFeat(Transform):
 
     def forward(self, data: dict) -> dict:
         atom_array = data["atom_array"]
-        # Check if there is already an annotation for D-amino acids
         if "is_d_amino_acid" not in atom_array.get_annotation_categories():
-            # Check if the res_name is in the D-amino acid set
             is_d_aa = np.isin(atom_array.res_name, D_AA)
-            # Create a new annotation for D-amino acids
 
             glycines = atom_array.res_name == "GLY"
-            # half the time, we will set glycine to be D-glycine
             is_d_aa = np.logical_or(
                 is_d_aa, np.logical_and(glycines, np.random.rand(len(glycines)) < 0.5)
             )
@@ -133,7 +124,6 @@ class AddIsDAminoAcidFeat(Transform):
                 is_d_aa,
             )
 
-        # Add feature for is_d_amino_acid
         if "is_d_amino_acid" not in data["feats"]:
             is_d_amino_acid = atom_array.get_annotation("is_d_amino_acid")
             data["feats"]["is_d_amino_acid"] = is_d_amino_acid

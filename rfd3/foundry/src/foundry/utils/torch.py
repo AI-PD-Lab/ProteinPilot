@@ -180,7 +180,7 @@ def assert_shape(tensor: Tensor, ref_shape: Sequence[int | None]):
             elif isinstance(ref_size, torch.Tensor):
                 with (
                     _suppress_tracer_warnings()
-                ):  # as_tensor results are registered as constants
+                ):
                     torch._assert(
                         torch.equal(torch.as_tensor(size), ref_size),
                         f"Wrong size for dimension {idx}",
@@ -188,7 +188,7 @@ def assert_shape(tensor: Tensor, ref_shape: Sequence[int | None]):
             elif isinstance(size, torch.Tensor):
                 with (
                     _suppress_tracer_warnings()
-                ):  # as_tensor results are registered as constants
+                ):
                     torch._assert(
                         torch.equal(size, torch.as_tensor(ref_size)),
                         f"Wrong size for dimension {idx}: expected {ref_size}",
@@ -228,20 +228,16 @@ def scatter_mean(zeros: Tensor, dim: int, index: Tensor, source: Tensor) -> Tens
     if dim < 0:
         dim = ndim + dim
 
-    # Expand 1D index (N,) to match source shape (..., N, C)
     shape = [1] * ndim
     shape[dim] = index.shape[0]
     idx = index.view(shape).expand_as(source)
 
-    # Sum source values into output positions
     result = zeros.scatter_add(dim, idx, source)
 
-    # Count how many source values land in each output position.
-    # Take a single slice along the last dim to avoid allocating a full (N, C) ones tensor.
-    idx_count = idx[..., :1]  # (..., N, 1)
-    ones = torch.ones_like(source[..., :1])  # (..., N, 1)
+    idx_count = idx[..., :1]
+    ones = torch.ones_like(source[..., :1])
     count = torch.zeros(*zeros.shape[:-1], 1, device=zeros.device, dtype=zeros.dtype)
-    count = count.scatter_add(dim, idx_count, ones)  # (..., I, 1)
+    count = count.scatter_add(dim, idx_count, ones)
 
     return result / count.clamp(min=1)
 
@@ -311,15 +307,11 @@ class Timer:
     def elapsed(self, reset: bool = True) -> float:
         """Calculate the elapsed time."""
         started_ = self.started_
-        # If the timing in progress, end it first.
         if self.started_:
             self.stop()
-        # Get the elapsed time.
         elapsed_ = self.elapsed_
-        # Reset the elapsed time
         if reset:
             self.reset()
-        # If timing was in progress, set it back.
         if started_:
             self.start()
         return elapsed_

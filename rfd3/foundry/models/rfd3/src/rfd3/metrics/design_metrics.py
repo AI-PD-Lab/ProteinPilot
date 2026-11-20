@@ -22,7 +22,6 @@ def get_clash_metrics(
     ligand_clash_threshold=1.5,
     chainbreak_threshold=0.75,
 ):
-    # HACK: For now, ligands are treated as any atomized residues
     is_ligand = np.logical_and(
         atom_array.is_ligand, ~atom_array.is_motif_atom_unindexed
     )
@@ -34,7 +33,6 @@ def get_clash_metrics(
         ca_dists = torch.norm(xyz[1:] - xyz[:-1], dim=-1)
         deviation = torch.abs(ca_dists - STANDARD_CACA_DIST)
 
-        # Allow leniency for expected chain breaks (e.g. PPI)
         chain_breaks = ca_atoms.chain_iid[1:] != ca_atoms.chain_iid[:-1]
         deviation[chain_breaks] = 0
 
@@ -48,16 +46,14 @@ def get_clash_metrics(
         protein_array = atom_array[atom_array.is_protein]
         resid = protein_array.res_id - protein_array.res_id.min()
         xyz = protein_array.coord
-        dists = np.linalg.norm(xyz[:, None] - xyz[None], axis=-1)  # N_atoms x N_atoms
+        dists = np.linalg.norm(xyz[:, None] - xyz[None], axis=-1)
 
-        # Block out intra-residue distances
         mask = np.triu(np.ones_like(dists), k=1).astype(bool)
         block_mask = np.abs(resid[:, None] - resid[None, :]) <= 1
         mask[block_mask] = False
         dists[~mask] = 999
 
         if backbone_only:
-            # Block out non-backbone atoms
             backbone_mask = np.isin(protein_array.atom_name, ["N", "CA", "C"])
             mask = backbone_mask[:, None] & backbone_mask[None, :]
             dists[~mask] = 999
@@ -69,7 +65,6 @@ def get_clash_metrics(
         if not is_ligand.any():
             return {}
 
-        # Clashes are any non-motif atom against any ligand atom
         xyz_ligand = atom_array[is_ligand].coord
         backbone_mask = np.isin(atom_array.atom_name, ["N", "CA", "C"]) & ~is_ligand
         xyz_diffused = atom_array[
@@ -78,21 +73,19 @@ def get_clash_metrics(
             & ~atom_array.is_motif_atom_with_fixed_coord
         ].coord
 
-        # If we have no diffused backbone atoms, return empty
         if xyz_diffused.shape[0] == 0:
             return {}
 
         diff = (
             xyz_diffused[:, None, :] - xyz_ligand[None, :, :]
-        )  # (n_diffused, n_ligand, 3)
-        dists_ligand = np.linalg.norm(diff, axis=-1)  # (n_diffused, n_ligand)
+        )
+        dists_ligand = np.linalg.norm(diff, axis=-1)
         dists = np.min(dists_ligand, axis=0)
         return {
             "n_clashing.ligand_clashes": int(np.sum(dists < ligand_clash_threshold)),
             "n_clashing.ligand_min_distance": float(np.min(dists)),
         }
 
-    # Accumulate metrics
     o = {}
     o = o | get_chainbreaks()
     o["n_clashing.interresidue_clashes_w_sidechain"] = get_interresidue_clashes()
@@ -129,22 +122,18 @@ def get_all_backbone_metrics(
     """
     o = {}
 
-    # ... Clash metrics
     o = o | get_clash_metrics(
         atom_array,
     )
 
     if verbose:
         if compute_non_clash_metrics_for_diffused_region_only:
-            # Subset to diffused region only
             atom_array = atom_array[~atom_array.is_motif_atom_with_fixed_coord]
 
-        # ... Add additional metrics
         o |= get_ss_metrics_and_rg(
             atom_array[~atom_array.is_motif_atom_with_fixed_coord]
         )
 
-        # Basic compositional statistics
         starts = get_token_starts(atom_array)
         protein_starts = starts[atom_array.is_protein[starts]]
         o["alanine_content"] = np.mean(atom_array[protein_starts].res_name == "ALA")
@@ -156,13 +145,7 @@ def get_all_backbone_metrics(
         if np.any(fixed):
             o["fixed_com"] = np.mean(atom_array.coord[fixed, :], axis=0).tolist()
 
-        # if "b_factor" in token_array.get_annotation_categories():
-        #     m["sequence_entropy_mean"] = np.mean(token_array.b_factor)
-        #     m["sequence_entropy_max"] = np.max(token_array.b_factor)
-        #     m["sequence_entropy_min"] = np.min(token_array.b_factor)
-        #     m["sequence_entropy_std"] = np.std(token_array.b_factor)
 
-    # ... Ensure JSON-saveable
     o = convert_to_float_or_str(o)
     return o
 
@@ -178,7 +161,7 @@ class AtomArrayMetrics(Metric):
         super().__init__()
         self.clash_threshold = 1.2
         self.float_threshold = (
-            3.0  # maximum closest-neighbour distance before considered a floating atom
+            3.0
         )
         self.standard_ca_dist = 3.8
         self.compute_for_diffused_region_only = compute_for_diffused_region_only
@@ -195,13 +178,11 @@ class AtomArrayMetrics(Metric):
         o = {}
 
         for atom_array in atom_array_stack:
-            # Subset to indexed tokens only
             atom_array = atom_array[~atom_array.is_motif_atom_unindexed]
 
             if self.compute_for_diffused_region_only:
                 atom_array = atom_array[~atom_array.is_motif_atom_with_fixed_coord]
 
-            # SS content and ROG
             if (
                 self.compute_ss_adherence_if_possible
                 and (
@@ -224,27 +205,22 @@ class AtomArrayMetrics(Metric):
                 ss_conditioning = None
             m = get_ss_metrics_and_rg(atom_array, ss_conditioning=ss_conditioning)
 
-            # Subset to token level array for consistency
             token_array = atom_array[get_token_starts(atom_array)]
 
-            # Basic compositional statistics
             m["alanine_content"] = np.mean(token_array.res_name == "ALA")
             m["glycine_content"] = np.mean(token_array.res_name == "GLY")
 
-            # Sequence Confidence
             if "b_factor" in token_array.get_annotation_categories():
                 m["sequence_entropy_mean"] = np.mean(token_array.b_factor)
                 m["sequence_entropy_max"] = np.max(token_array.b_factor)
                 m["sequence_entropy_min"] = np.min(token_array.b_factor)
                 m["sequence_entropy_std"] = np.std(token_array.b_factor)
 
-            # Write to o
             for k, v in m.items():
                 if k not in o:
                     o[k] = []
                 o[k].append(v)
 
-        # Summarize stats
         for k, v in o.items():
             o[k] = float(np.mean(v))
         return o
@@ -268,17 +244,14 @@ class MetadataMetrics(Metric):
 
         o = {}
         for idx, metadata in prediction_metadata.items():
-            # Flatten dictionary
             metadata = _flatten_dict(metadata)
 
-            # Update output dictionary
             for key, value in metadata.items():
                 if isinstance(value, (int, float)):
                     if key not in o:
                         o[key] = []
                     o[key].append(value)
 
-        # Reduce via mean
         o = {k: float(np.mean(v)) for k, v in o.items()}
         return o
 
@@ -288,7 +261,7 @@ class BackboneMetrics(Metric):
         super().__init__()
         self.clash_threshold = 1.2
         self.float_threshold = (
-            3.0  # maximum closest-neighbour distance before considered a floating atom
+            3.0
         )
         self.standard_ca_dist = 3.8
         self.compute_for_diffused_region_only = compute_for_diffused_region_only
@@ -296,7 +269,7 @@ class BackboneMetrics(Metric):
     @property
     def kwargs_to_compute_args(self) -> dict[str, Any]:
         return {
-            "X_L": ("network_output", "X_L"),  # [D, L, 3]
+            "X_L": ("network_output", "X_L"),
             "tok_idx": ("network_input", "f", "atom_to_token_map"),
             "f": ("network_input", "f"),
         }
@@ -307,9 +280,9 @@ class BackboneMetrics(Metric):
         tok_idx = tok_idx.cpu().numpy()
         dists = np.linalg.norm(
             xyz[..., :, None, :] - xyz[..., None, :, :], axis=-1
-        )  # N_atoms x N_atoms
+        )
 
-        is_protein = f["is_protein"][tok_idx].cpu().numpy()  # n_atoms
+        is_protein = f["is_protein"][tok_idx].cpu().numpy()
 
         mask = np.zeros_like(dists, dtype=bool)
         mask = mask | (np.eye(dists.shape[-1], dtype=bool))[None]
@@ -319,7 +292,7 @@ class BackboneMetrics(Metric):
 
         num_clashes_L = (dists.min(axis=-1) < self.clash_threshold).astype(
             float
-        )  # B, L
+        )
         o["frac_clashing"] = float(num_clashes_L.mean(-1).mean())
         o["n_clashing"] = float(num_clashes_L.sum(-1).mean())
 
@@ -339,16 +312,14 @@ class BackboneMetrics(Metric):
                 (dists.min(axis=-1) < self.clash_threshold).astype(float).sum(-1).mean()
             )
 
-        # We do this after clash detection, since that should consider both chains
         if self.compute_for_diffused_region_only:
             diffused_region = ~(f["is_motif_atom_with_fixed_coord"].cpu().numpy())
             xyz = xyz[:, diffused_region]
             tok_idx = tok_idx[diffused_region]
 
-        # Num floating
         dists = np.linalg.norm(
             xyz[..., :, None, :] - xyz[..., None, :, :], axis=-1
-        )  # N_atoms x N_atoms
+        )
         mask = np.zeros_like(dists, dtype=bool)
         mask = mask & np.eye(dists.shape[-1], dtype=bool)[None]
         dists[mask] = 999
@@ -357,7 +328,6 @@ class BackboneMetrics(Metric):
         o["frac_floating"] = float(is_floating.mean(-1).mean())
 
         if "is_ca" in f:
-            # Calculate CA
             is_ca = f["is_ca"].cpu().numpy()
             if self.compute_for_diffused_region_only:
                 is_ca = is_ca[diffused_region]
@@ -369,7 +339,7 @@ class BackboneMetrics(Metric):
                 xyz = X_L.cpu()[:, idx_mask]
 
             ca_dists = torch.norm(xyz[:, 1:] - xyz[:, :-1], dim=-1)
-            deviation = torch.abs(ca_dists - self.standard_ca_dist)  # B, (I-1)
+            deviation = torch.abs(ca_dists - self.standard_ca_dist)
             is_chainbreak = deviation > 0.75
 
             o["max_ca_deviation"] = float(deviation.max(-1).values.mean())
@@ -384,17 +354,15 @@ class PPIMetrics(Metric):
 
     def __init__(self, distance_cutoff: float = 4.5):
         super().__init__()
-        self.distance_cutoff = distance_cutoff  # Distance cutoff for hotspot contacts
+        self.distance_cutoff = distance_cutoff
 
     @property
     def kwargs_to_compute_args(self) -> dict[str, Any]:
         return {
             "atom_array_stack": ("predicted_atom_array_stack"),
-            # "ppi_hotspots_mask": ("network_input", "f", "is_atom_level_hotspot"),
         }
 
     def compute(self, atom_array_stack):
-        # Get the number of hotspots for which a diffused atom is within the distance cutoff
         metrics_dict = {"fraction_hotspots_contacted": []}
         for atom_array in atom_array_stack:
             ppi_hotspots_mask = atom_array.get_annotation(
@@ -423,38 +391,31 @@ class SequenceMetrics(Metric):
     @property
     def kwargs_to_compute_args(self) -> dict[str, Any]:
         return {
-            "S_I": ("network_output", "sequence_logits_I"),  # [D, I, K]
-            "S_gt_I": ("extra_info", "seq_token_lvl"),  # [D, I]
+            "S_I": ("network_output", "sequence_logits_I"),
+            "S_gt_I": ("extra_info", "seq_token_lvl"),
         }
 
     def compute(self, S_I, S_gt_I):
         o = {}
-        seq_head_pred = S_I.argmax(dim=-1)  # B, I
+        seq_head_pred = S_I.argmax(dim=-1)
         seq_head_recovery = seq_head_pred == S_gt_I
 
-        # Filter out unresolved residues
         seq_head_recovery = seq_head_recovery.float().mean()
         o["seq_head_recovery"] = float(seq_head_recovery.mean())
 
-        # Calculate the confusion matrix
-        seq_head_gt = S_gt_I[None].expand(seq_head_pred.shape[0], -1)  # B, I
+        seq_head_gt = S_gt_I[None].expand(seq_head_pred.shape[0], -1)
 
-        # One-hot encode predictions and ground truth
         seq_head_pred = S_I.clone()
-        seq_head_pred = torch.nn.functional.softmax(seq_head_pred, dim=-1)  # (B, I, C)
+        seq_head_pred = torch.nn.functional.softmax(seq_head_pred, dim=-1)
 
-        # Set any unresolve residues to be 31
         seq_head_gt = torch.nn.functional.one_hot(
             seq_head_gt, num_classes=S_I.shape[-1]
-        ).float()  # (B, I, C)
+        ).float()
 
-        # Permute predictions to shape (B, C, I) for matmul
-        seq_head_pred = seq_head_pred.permute(0, 2, 1)  # (B, C, I)
+        seq_head_pred = seq_head_pred.permute(0, 2, 1)
 
-        # Compute confusion matrix per batch (B, C, C)
         confusion_matrix = torch.matmul(seq_head_pred, seq_head_gt)
 
-        # Sum over batch to get (C, C)
         confusion_matrix = confusion_matrix.sum(dim=0)
         confusion_matrix = confusion_matrix.cpu().numpy().astype(np.float32)
 

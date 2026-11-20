@@ -13,7 +13,6 @@ from omegaconf import OmegaConf
 from ..common import run_once
 
 
-#  (Custom resolvers)
 @run_once
 def register_resolvers():
     resolvers = {
@@ -38,7 +37,6 @@ def resolve_import(module_path: str, attribute_path: str = None) -> Any:
     """
     module = importlib.import_module(module_path)
     if attribute_path is not None:
-        # Split the attribute path to navigate through nested attributes
         attributes = attribute_path.split(".")
         attr = module
         for attr_name in attributes:
@@ -71,7 +69,6 @@ def chain_type_info_to_regex(*args) -> Any:
                 f"Attribute not found for ChainType or ChainTypeInfo: {arg}."
             )
 
-    # Remove the trailing '|'
     regex_str = regex_str[:-1]
 
     return regex_str

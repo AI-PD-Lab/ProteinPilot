@@ -28,7 +28,6 @@ class XPUMixedPrecision(MixedPrecision):
         Raises:
             ValueError: If precision is not "16-mixed" or "bf16-mixed".
         """
-        # Determine dtype from precision string
         if precision == "16-mixed":
             dtype = torch.float16
         elif precision == "bf16-mixed":
@@ -37,7 +36,6 @@ class XPUMixedPrecision(MixedPrecision):
             msg = f"Invalid precision: {precision}. Must be '16-mixed' or 'bf16-mixed'"
             raise ValueError(msg)
 
-        # Initialize with xpu device type
         super().__init__(precision=precision, device="xpu")
         self._desired_input_dtype = dtype
 

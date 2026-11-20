@@ -146,7 +146,6 @@ def calculate_hbonds(
             & (atom_array.atom_name == item["a_atom"])
         )
 
-        # Ensure that we can uniquely identify the donor and acceptor atoms
         if current_donor_mask.sum() != 1:
             raise ValueError(
                 f"Unable to uniquely identify a donor atom with chain_iid={item['d_chain']}, res_id={item['d_resi']}, atom_name={item['d_atom']}."
@@ -159,7 +158,6 @@ def calculate_hbonds(
         current_donor_is_motif = atom_array.is_motif_atom[current_donor_mask][0]
         current_acceptor_is_motif = atom_array.is_motif_atom[current_acceptor_mask][0]
 
-        # Only keep hbonds between the motif and diffused regions
         if current_donor_is_motif != current_acceptor_is_motif:
             motif_hbonds.append(item)
             donor_mask |= current_donor_mask
@@ -189,7 +187,6 @@ class CalculateHbondsPlus(Transform):
         check_contains_keys(data, ["atom_array"])
         check_is_instance(data, "atom_array", AtomArray)
         check_atom_array_annotation(data, ["res_name"])
-        # check_atom_array_has_hydrogen(data)
 
     def forward(self, data: dict) -> dict:
         atom_array: AtomArray = data["atom_array"]

@@ -6,10 +6,10 @@ logger = logging.getLogger(__name__)
 
 
 def weighted_rigid_align(
-    X_L,  # [B, L, 3]
-    X_gt_L,  # [B, L, 3]
-    X_exists_L=None,  # [L]
-    w_L=None,  # [B, L]
+    X_L,
+    X_gt_L,
+    X_exists_L=None,
+    w_L=None,
 ):
     """
     Weighted rigid body alignment of X_gt_L onto X_L with weights w_L
@@ -19,7 +19,6 @@ def weighted_rigid_align(
       X_align_L: [B, L, 3]
     """
 
-    # Canonicalize dimensions
     if X_L.ndim == 2:
         X_L = X_L[None]
     if X_gt_L.ndim == 2:
@@ -33,7 +32,6 @@ def weighted_rigid_align(
             w_L = w_L[None]
         w_L = w_L.to(torch.float32)
 
-    # Assert `X_exists_L` is a boolean mask
     assert (
         X_exists_L.dtype == torch.bool
     ), "X_exists_L should be a boolean mask! Otherwise, the alignment will be incorrect (silent failure)!"
@@ -54,7 +52,6 @@ def weighted_rigid_align(
     X_resolved = X_resolved - u_X.unsqueeze(-2)
     X_gt_resolved = X_gt_resolved - u_X_gt.unsqueeze(-2)
 
-    # Computation of the covariance matrix
     C = torch.einsum("bji,bjk->bik", w_resolved[..., None] * X_gt_resolved, X_resolved)
 
     U, S, V = torch.linalg.svd(C)

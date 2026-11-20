@@ -19,10 +19,9 @@ def bucketize_scaled_distogram(R_L, min_dist=1, max_dist=30, sigma_data=16, n_bi
     D_LL: B, N, N
     D_LL_binned: B, N, N, n_bins
     """
-    D_LL = R_L.unsqueeze(-2) - R_L.unsqueeze(-3)  # [B, N, N, 3]
-    D_LL = torch.linalg.norm(D_LL, dim=-1)  # [B, N, N]
+    D_LL = R_L.unsqueeze(-2) - R_L.unsqueeze(-3)
+    D_LL = torch.linalg.norm(D_LL, dim=-1)
 
-    # normalize
     min_dist, max_dist = min_dist / sigma_data, max_dist / sigma_data
 
     bins = torch.linspace(min_dist, max_dist, n_bins - 1, device=D_LL.device)
@@ -47,9 +46,8 @@ def build_valid_mask(
     tokens, counts = torch.unique(tok_idx, return_counts=True)
     A = int(counts.max()) if n_atoms_per_tok_max is None else int(n_atoms_per_tok_max)
 
-    # build [n_tokens, A] mask; broadcasting keeps it vectorised
-    atom_idx_grid = torch.arange(A, device=tok_idx.device)[None, :]  # (1, A)
-    valid_mask = atom_idx_grid < counts[:, None]  # (n_tok, A)
+    atom_idx_grid = torch.arange(A, device=tok_idx.device)[None, :]
+    valid_mask = atom_idx_grid < counts[:, None]
 
     return valid_mask
 
@@ -73,17 +71,15 @@ def ungroup_atoms(Q_L, valid_mask):
     B, n_atoms, c = Q_L.shape
     n_tokens, A = valid_mask.shape
     if Q_L.device.type == "mps":
-        # masked_scatter_ with non-contiguous masks is unreliable on MPS;
-        # use scatter with integer indices instead.
-        flat_idx = _atom_flat_idx(valid_mask)  # (n_atoms,)
-        idx = flat_idx.view(1, -1, 1).expand(B, -1, c)  # (B, n_atoms, c)
+        flat_idx = _atom_flat_idx(valid_mask)
+        idx = flat_idx.view(1, -1, 1).expand(B, -1, c)
         Q_IA = torch.zeros(B, n_tokens * A, c, dtype=Q_L.dtype, device=Q_L.device)
         Q_IA = Q_IA.scatter(1, idx, Q_L)
         return Q_IA.reshape(B, n_tokens, A, c)
     else:
         Q_IA = torch.zeros(B, n_tokens, A, c, dtype=Q_L.dtype, device=Q_L.device)
-        mask4d = valid_mask.unsqueeze(0).unsqueeze(-1)  # (1, n_tok, A, 1)
-        mask4d = mask4d.expand(B, -1, -1, c)  # (B, n_tok, A, c)
+        mask4d = valid_mask.unsqueeze(0).unsqueeze(-1)
+        mask4d = mask4d.expand(B, -1, -1, c)
         Q_IA.masked_scatter_(mask4d, Q_L)
         return Q_IA
 
@@ -101,9 +97,7 @@ def group_atoms(Q_IA: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
     """
     B, n_tok, A, c = Q_IA.shape
     if Q_IA.device.type == "mps":
-        # Boolean indexing with non-contiguous expanded masks is unreliable on MPS;
-        # use integer index gather instead.
-        flat_idx = _atom_flat_idx(valid_mask)  # (n_atoms,)
+        flat_idx = _atom_flat_idx(valid_mask)
         Q_L = Q_IA.reshape(B, n_tok * A, c)[:, flat_idx, :]
         return Q_L.contiguous()
     else:
@@ -113,18 +107,16 @@ def group_atoms(Q_IA: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
 
 
 def group_pair(P_IAA, valid_mask):
-    # Valid mask: [L, A]
-    # P_IAA: (B, L, A, A, c) or (L, A, A, c)
     if P_IAA.ndim == 5:
         B, _, _, A, c = P_IAA.shape
         mask5d = valid_mask[None, ..., None, None].expand(
             B, -1, -1, A, c
-        )  # (B, L, L, A, c)
-        P_LA = P_IAA[mask5d].view(B, -1, A, c)  # (B, n_valid, A, c)
+        )
+        P_LA = P_IAA[mask5d].view(B, -1, A, c)
     elif P_IAA.ndim == 4:
         _, _, A, c = P_IAA.shape
-        mask4d = valid_mask[..., None, None].expand(-1, -1, A, c)  # (L, L, A, c)
-        P_LA = P_IAA[mask4d].view(-1, A, c)  # (n_valid, A, c)
+        mask4d = valid_mask[..., None, None].expand(-1, -1, A, c)
+        P_LA = P_IAA[mask4d].view(-1, A, c)
     else:
         raise ValueError(
             f"Unexpected input shape {P_IAA.shape}: must be (B, L, A, A, c) or (L, A, A, c)"
@@ -155,7 +147,6 @@ def scatter_add_pair_features(P_LK_tgt, P_LK_indices, P_LA_src, P_LA_indices):
     matching indices.
 
     """
-    # Handle case when indices and P_LA don't have batch dimensions
     B, L, k = P_LK_indices.shape
     if P_LA_indices.ndim == 2:
         P_LA_indices = P_LA_indices.unsqueeze(0).expand(B, -1, -1).contiguous()
@@ -167,15 +158,15 @@ def scatter_add_pair_features(P_LK_tgt, P_LK_indices, P_LA_src, P_LA_indices):
         P_LA_src.shape[-1], P_LK_tgt.shape[-1]
     )
 
-    matches = P_LA_indices.unsqueeze(-1) == P_LK_indices.unsqueeze(-2)  # (B, L, a, k)
+    matches = P_LA_indices.unsqueeze(-1) == P_LK_indices.unsqueeze(-2)
     if not torch.all(matches.sum(dim=(-1, -2)) >= 1):
         raise ValueError("Found multiple scatter indices for some atoms")
     elif not torch.all(matches.sum(dim=-1) <= 1):
         raise ValueError("Did not find a scatter index for every atom")
-    k_indices = matches.long().argmax(dim=-1)  # (B, L, a)
+    k_indices = matches.long().argmax(dim=-1)
     scatter_indices = (
         k_indices.unsqueeze(-1).expand(-1, -1, -1, P_LK_tgt.shape[-1]).contiguous()
-    )  # (B, L, a, c)
+    )
     P_LK_tgt = P_LK_tgt.scatter_add(
         dim=2, index=scatter_indices, src=P_LA_src.contiguous()
     )
@@ -191,11 +182,10 @@ def _batched_gather(values: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
     B, L, C = values.shape
     k = idx.shape[-1]
 
-    #   (B, L, 1, C)  → stride-0 along k  → (B, L, k, C)
     src = values.unsqueeze(2).expand(-1, -1, k, -1).contiguous()
-    idx = idx.unsqueeze(-1).expand(-1, -1, -1, C).contiguous()  # (B, L, k, C)
+    idx = idx.unsqueeze(-1).expand(-1, -1, -1, C).contiguous()
 
-    return torch.gather(src, 1, idx)  # dim=1 is the L-axis
+    return torch.gather(src, 1, idx)
 
 
 @torch.no_grad()
@@ -218,44 +208,18 @@ def create_attention_indices(
     if X_L is None:
         X_L = torch.randn(
             (1, L, 3), device=device, dtype=torch.float
-        )  # [L, 3] - random
-    D_LL = torch.cdist(X_L, X_L, p=2)  # [B, L, L] - pairwise atom distances
+        )
+    D_LL = torch.cdist(X_L, X_L, p=2)
 
-    # Create attention indices using neighbour distances
     base_mask = ~f["unindexing_pair_mask"][
         tok_idx[None, :], tok_idx[:, None]
-    ]  # [n_atoms, n_atoms]
+    ]
     k_actual = min(n_attn_keys, L)
 
-    # Reserve guaranteed inter-chain attention keys for ANY multi-chain structure.
-    #
-    # The gate used to be `> 3` unique chains, with the comment "for symmetric
-    # structures" -- so a DIMER or a binder+target complex (2 chains) fell through to
-    # the chain-blind path. That path is the problem: build_index_mask AND-s the
-    # guaranteed mask with `same_chain`, so cross-chain pairs are excluded from the
-    # guaranteed keys entirely and appear only if the remaining budget happens to be
-    # filled by spatial proximity. Early in diffusion the binder is noise, far from
-    # the target, so no cross-chain keys are selected and the model cannot see the
-    # target while it folds. That is exactly the observed failure: each chain's
-    # internal geometry comes out clean (intra-chain keys are guaranteed) while the
-    # specified interface never forms.
     chain_ids = f["asym_id"][tok_idx] if "asym_id" in f else None
     if (
         chain_ids is not None and len(torch.unique(chain_ids)) > 1
-    ):  # Multi-chain structure (dimer included)
-        # Reserve up to 25% of attention keys for inter-chain interactions.
-        #
-        # The `max(32, k_actual // 4)` alone is degenerate for small key budgets:
-        # k_actual == 32 gives k_intra == 0 and k_actual < 32 gives it NEGATIVE, which
-        # surfaces downstream as "RuntimeError: selected index k out of range" from
-        # topk in extend_index_mask_with_neighbours. That was unreachable while this
-        # branch required >3 chains; lowering the gate to >1 so dimers get guaranteed
-        # cross-chain keys exposed it to every 2-chain example, and it killed a 15h
-        # training run at the first crop with a small budget.
-        #
-        # Cap the inter-chain share at half the budget and floor both sides at 1, so
-        # the split degrades gracefully instead of inverting. Large budgets are
-        # unaffected: k_actual=128 still yields 32/96, the original intent.
+    ):
         k_inter_chain = min(max(32, k_actual // 4), max(1, k_actual // 2))
         k_intra_chain = max(1, k_actual - k_inter_chain)
         k_inter_chain = max(1, k_actual - k_intra_chain)
@@ -270,7 +234,6 @@ def create_attention_indices(
             base_mask=base_mask,
         )
     else:
-        # Regular attention for single chain or small structures
         attn_indices = get_sparse_attention_indices(
             tok_idx,
             D_LL,
@@ -278,7 +241,7 @@ def create_attention_indices(
             k_max=k_actual,
             chain_id=chain_ids,
             base_mask=base_mask,
-        )  # [B, L, k] | indices[b, i, j] = atom index for atom i to j-th attn query
+        )
 
     return attn_indices
 
@@ -304,49 +267,29 @@ def get_sparse_attention_indices_with_inter_chain(
     """
     B, L, _ = D_LL.shape
 
-    # Get regular intra-chain indices (limited to k_intra)
     intra_indices = get_sparse_attention_indices(
         tok_idx, D_LL, n_seq_neighbours, k_intra, chain_id, base_mask
-    )  # [B, L, k_intra]
+    )
 
-    # Get inter-chain indices for clash avoidance.
-    #
-    # FIXED: the previous implementation looped `for c in unique_chains` and then used
-    # `c` -- a chain ID *value* -- as the ATOM ROW index (`inter_indices[b, c, ...]`,
-    # `D_LL[b, c, ...]`, `base_mask[c, :]`). Only the first few rows (those whose index
-    # happened to equal a chain id) ever received inter-chain keys; every other atom
-    # kept the torch.zeros initialisation and therefore attended to atom 0, k_inter
-    # times over -- duplicated, meaningless keys. `query_chain = chain_id[c]` was wrong
-    # for the same reason, so the "other chain" mask was usually computed against
-    # chain 0 regardless of which chain was being processed.
-    #
-    # Correct formulation is per-ATOM, not per-chain: for every atom, take the k_inter
-    # nearest atoms that live in a DIFFERENT chain. Vectorised, so it also drops the
-    # python loop over chains.
     inter_indices = torch.zeros(B, L, k_inter, dtype=torch.long, device=D_LL.device)
     k_inter_eff = min(k_inter, L)
-    cross_allowed = chain_id.unsqueeze(-1) != chain_id.unsqueeze(-2)  # (L, L)
+    cross_allowed = chain_id.unsqueeze(-1) != chain_id.unsqueeze(-2)
     if base_mask is not None:
         cross_allowed = cross_allowed & base_mask
-    n_avail = cross_allowed.sum(dim=-1)  # (L,)
+    n_avail = cross_allowed.sum(dim=-1)
     self_idx = torch.arange(L, device=D_LL.device).unsqueeze(-1).expand(-1, k_inter)
     for b in range(B):
         d = D_LL[b].masked_fill(~cross_allowed, float("inf"))
-        _, idx = torch.topk(d, k_inter_eff, dim=-1, largest=False)  # (L, k_inter_eff)
+        _, idx = torch.topk(d, k_inter_eff, dim=-1, largest=False)
         if k_inter_eff < k_inter:
             idx = torch.cat(
                 [idx, idx[:, -1:].expand(-1, k_inter - k_inter_eff)], dim=-1
             )
-        # Atoms with no cross-chain partner at all (single-chain crop, or everything
-        # masked out): point at self rather than at a spurious atom 0. Self keys are
-        # already present in the intra set, so these are inert duplicates rather than
-        # misleading attention targets.
         inter_indices[b] = torch.where(n_avail.unsqueeze(-1) > 0, idx, self_idx)
 
-    # Combine intra and inter chain indices
     combined_indices = torch.cat(
         [intra_indices, inter_indices], dim=-1
-    )  # [B, L, k_total]
+    )
 
     return combined_indices
 
@@ -374,44 +317,34 @@ def build_index_mask(
     device = tok_idx.device
     L = tok_idx.shape[0]
     k_max = min(k_max, L)
-    I = int(tok_idx.max()) + 1  # Number of unique tokens
+    I = int(tok_idx.max()) + 1
     n_atoms_per_token = torch.zeros(I, device=device).float()
     n_atoms_per_token.scatter_add_(0, tok_idx.long(), torch.ones_like(tok_idx).float())
 
-    # Create index masks for tokens and atoms
     token_indices = torch.arange(I, device=device)
     token_diff = (token_indices[:, None] - token_indices[None, :]).abs()
     atom_indices = torch.arange(L, device=device)
     atom_diff = (atom_indices[:, None] - atom_indices[None, :]).abs()
 
-    # Build token-token mask: [I, I]
     token_mask = token_diff <= n_sequence_neighbours
 
-    # Expand token_mask to full [L, L] mask using broadcast
-    # token_to_idx maps each position to a token index [L]
-    token_i = tok_idx[:, None]  # (L, 1)
-    token_j = tok_idx[None, :]  # (1, L)
-    mask = token_mask[token_i, token_j]  # (L, L)
+    token_i = tok_idx[:, None]
+    token_j = tok_idx[None, :]
+    mask = token_mask[token_i, token_j]
     mask = mask & (atom_diff <= (k_max // 2))
 
-    # Exclude tokens which are partially filled (L, I)
     n_query_per_token = torch.zeros((L, I), device=device).float()
     n_query_per_token.scatter_add_(
         1, tok_idx.long()[None, :].expand(L, -1).contiguous(), mask.float()
     )
 
-    # Find mask for the atoms for which the number of keys
-    # match the number of atoms in the token (L, I)
     fully_included = n_query_per_token == n_atoms_per_token[None, :]
 
-    # Contract to (L, L) and count the number of atoms within tokens that
-    # fully include other tokens
     n_atoms_fully_included = torch.zeros((I, I), device=device)
     n_atoms_fully_included.index_add_(0, tok_idx.long(), fully_included.float())
     full_token_mask = n_atoms_fully_included == n_atoms_per_token[:, None]
 
-    # Map this back to (L, L) — include token j in row i only if all its atoms are included
-    full_token_mask = full_token_mask[token_i, token_j]  # (L, L)
+    full_token_mask = full_token_mask[token_i, token_j]
     mask &= full_token_mask
 
     if chain_id is not None:
@@ -453,32 +386,26 @@ def extend_index_mask_with_neighbours(
     device = D_LL.device
     inf = torch.tensor(float("inf"), dtype=D_LL.dtype, device=device)
 
-    # 1. Selection of sequence neighbours
-    # MPS does not handle non-contiguous inputs to torch.where correctly,
-    # so use .repeat() (allocates) there; .expand() (zero-copy view) elsewhere.
     if device.type == "mps":
         all_idx_row = torch.arange(L, device=device).unsqueeze(0).repeat(L, 1)
     else:
         all_idx_row = torch.arange(L, device=device).unsqueeze(0).expand(L, L)
     indices = torch.where(
         mask.contiguous(), all_idx_row, inf
-    )  # sentinel inf if not-forced
-    indices = indices.sort(dim=1)[0][:, :k]  # (L, k)
+    )
+    indices = indices.sort(dim=1)[0][:, :k]
 
-    # 2. Find k-nn excluding forced indices
     D_LL = torch.where(mask.contiguous(), inf, D_LL)
     filler_idx = torch.topk(D_LL, k, dim=-1, largest=False).indices
 
-    # ... Reverse last axis s.t. best matched indices are last
     filler_idx = filler_idx.flip(dims=[-1])
 
-    # 3. Fill indices
     to_fill = indices == inf
     to_fill = to_fill.expand_as(filler_idx).contiguous()
     indices = indices.expand_as(filler_idx).contiguous()
     indices = torch.where(to_fill, filler_idx, indices)
 
-    return indices.long()  # (B, L, k)
+    return indices.long()
 
 
 def get_sparse_attention_indices(
@@ -489,7 +416,6 @@ def get_sparse_attention_indices(
     )
     indices = extend_index_mask_with_neighbours(mask, D_LL, k_max)
 
-    # Sort and assert no duplicates (optional but good practise)
     indices, _ = torch.sort(indices, dim=-1)
     if indices.device.type != "mps" and (indices[..., 1:] == indices[..., :-1]).any():
         raise AssertionError("Tensor has duplicate elements along the last dimension.")
@@ -497,7 +423,6 @@ def get_sparse_attention_indices(
     assert (
         indices.shape[-1] == k_max
     ), f"Expected k_max={k_max} indices, got {indices.shape[-1]} instead."
-    # Detach to avoid gradients flowing through indices
 
     return indices.detach()
 
@@ -545,11 +470,11 @@ def create_valid_mask_LA(valid_mask):
     I, A = valid_mask.shape
     L = valid_mask.sum()
     pos = torch.arange(A, device=valid_mask.device)
-    rel_pos = pos.unsqueeze(-2) - pos.unsqueeze(-1)  # [A, A]
-    rel_pos = rel_pos.unsqueeze(0).expand(I, -1, -1)  # [I, A, A]
+    rel_pos = pos.unsqueeze(-2) - pos.unsqueeze(-1)
+    rel_pos = rel_pos.unsqueeze(0).expand(I, -1, -1)
     rel_pos_LA = rel_pos[valid_mask[..., None].expand_as(rel_pos)].view(
         L, A
-    )  # [I, A, A] -> [L, A]
+    )
 
     indices = torch.arange(L, device=valid_mask.device).unsqueeze(-1).expand(L, A)
     indices = indices + rel_pos_LA
@@ -583,51 +508,36 @@ def pairwise_mean_pool(
     """
     B, _, _, _ = pairwise_atom_features.shape
 
-    # Create one-hot encoding for atom-to-token mapping
     atom_to_token_onehot = F.one_hot(atom_to_token_map.long(), num_classes=I).to(
         dtype
-    )  # (L, I)
+    )
 
-    # Use einsum to aggregate features across atom pairs for each token pair
-    # For each token pair (i, j), sum over all atom pairs (l1, l2) where l1→i and l2→j
-    # Result[b,i,j,d] = sum_l1,l2 ( onehot[l1,i] * onehot[l2,j] * features[b,l1,l2,d] )
     use_memory_efficient_einsum = True
     if use_memory_efficient_einsum:
-        # Memory-optimized implementation using two-step einsum:
-        # First step: contract on axis 1 (left-side tokens)
-        # (L, I)^T = (I, L), (B, L, L, d) → (B, I, L, d)
         temp = torch.einsum(
             "ia,bacd->bicd", atom_to_token_onehot.T, pairwise_atom_features
         )
 
-        # Free the original to save memory if not needed
         del pairwise_atom_features
 
-        # Second step: contract on axis 2 (right-side tokens)
-        # (L, I) = (L, I), (B, I, L, d) → (B, I, I, d)
         token_features_sum = torch.einsum("cj,bicd->bijd", atom_to_token_onehot, temp)
 
-        # Optionally free temp
         del temp
     else:
         token_features_sum = torch.einsum(
             "ai,cj,bacd->bijd",
-            atom_to_token_onehot,  # (L, I)
-            atom_to_token_onehot,  # (L, I)
-            pairwise_atom_features,  # (B, L, L, d_hidden)
-        )  # (B, I, I, d_hidden)
+            atom_to_token_onehot,
+            atom_to_token_onehot,
+            pairwise_atom_features,
+        )
 
-    # Count the number of atom pairs contributing to each token pair
-    # count[i, j] = number of atom pairs (l1, l2) where l1→i and l2→j (same for all batches)
-    atom_counts_per_token = atom_to_token_onehot.sum(dim=0)  # (I,)
+    atom_counts_per_token = atom_to_token_onehot.sum(dim=0)
     token_pair_counts = torch.outer(
         atom_counts_per_token, atom_counts_per_token
-    )  # (I, I) (= outer product)
+    )
 
-    # Expand to match batch dimension: (I, I) -> (B, I, I)
     token_pair_counts = token_pair_counts.unsqueeze(0).expand(B, -1, -1)
 
-    # Avoid division by zero and compute mean
     token_pair_counts = torch.clamp(token_pair_counts, min=1)
     token_pairwise_features = token_features_sum / token_pair_counts.unsqueeze(-1)
 

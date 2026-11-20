@@ -38,11 +38,9 @@ def _resolve_checkpoint_dirs(checkpoint_dir: Optional[Path]) -> list[Path]:
         if resolved not in checkpoint_dirs:
             checkpoint_dirs.insert(0, resolved)
         else:
-            # Move to front
             checkpoint_dirs.remove(resolved)
             checkpoint_dirs.insert(0, resolved)
 
-        # Try to persist checkpoint dir to .env (optional, may not exist in Colab etc.)
         if append_checkpoint_to_env(checkpoint_dirs):
             console.print(
                 f"Tracked checkpoint directories: {':'.join(str(path) for path in checkpoint_dirs)}"
@@ -72,7 +70,6 @@ def download_file(url: str, dest: Path, verify_hash: Optional[str] = None) -> No
         TransferSpeedColumn(),
         TimeRemainingColumn(),
     ) as progress:
-        # Get file size
         with urlopen(url) as response:
             file_size = int(response.headers.get("Content-Length", 0))
 
@@ -80,7 +77,6 @@ def download_file(url: str, dest: Path, verify_hash: Optional[str] = None) -> No
                 f"Downloading {dest.name}", total=file_size, start=True
             )
 
-            # Download with progress
             hasher = hashlib.sha256() if verify_hash else None
             with open(dest, "wb") as f:
                 while True:
@@ -92,11 +88,10 @@ def download_file(url: str, dest: Path, verify_hash: Optional[str] = None) -> No
                         hasher.update(chunk)
                     progress.update(task, advance=len(chunk))
 
-    # Verify hash if provided
     if verify_hash:
         computed_hash = hasher.hexdigest()
         if computed_hash != verify_hash:
-            dest.unlink()  # Remove corrupted file
+            dest.unlink()
             raise ValueError(
                 f"Hash mismatch! Expected {verify_hash}, got {computed_hash}"
             )
@@ -119,7 +114,6 @@ def install_model(model_name: str, checkpoint_dir: Path, force: bool = False) ->
     checkpoint_info = REGISTERED_CHECKPOINTS[model_name]
     dest_path = checkpoint_dir / checkpoint_info.filename
 
-    # Check if already exists
     if dest_path.exists() and not force:
         console.print(
             f"[yellow]⚠[/yellow] {model_name} checkpoint already exists at {dest_path}"
@@ -163,13 +157,11 @@ def install(
         foundry install rfd3 rfd3na rf3
         foundry install proteinmpnn --checkpoint-dir ./checkpoints
     """
-    # Determine checkpoint directory
     checkpoint_dirs = _resolve_checkpoint_dirs(checkpoint_dir)
     primary_checkpoint_dir = checkpoint_dirs[0]
 
     console.print(f"[bold]Install target:[/bold] {primary_checkpoint_dir}\n")
 
-    # Expand 'all' to all available models
     if "all" in models:
         models_to_install = list(REGISTERED_CHECKPOINTS.keys())
     elif "base-models" in models:
@@ -177,7 +169,6 @@ def install(
     else:
         models_to_install = models
 
-    # Install each model
     for model_name in models_to_install:
         install_model(model_name, primary_checkpoint_dir, force)
         console.print()
@@ -204,7 +195,7 @@ def list_installed():
             continue
         ckpts = list(checkpoint_dir.glob("*.ckpt")) + list(checkpoint_dir.glob("*.pt"))
         for ckpt in ckpts:
-            size = ckpt.stat().st_size / (1024**3)  # GB
+            size = ckpt.stat().st_size / (1024**3)
             checkpoint_files.append((ckpt, size))
 
     if not checkpoint_files:
@@ -231,7 +222,6 @@ def clean(
     """Remove all downloaded checkpoints."""
     checkpoint_dirs = _resolve_checkpoint_dirs(None)
 
-    # List files to delete
     checkpoint_files: list[Path] = []
     for checkpoint_dir in checkpoint_dirs:
         if not checkpoint_dir.exists():
@@ -248,20 +238,18 @@ def clean(
     console.print("[bold]Files to delete:[/bold]")
     total_size = 0
     for ckpt in sorted(checkpoint_files, key=str):
-        size = ckpt.stat().st_size / (1024**3)  # GB
+        size = ckpt.stat().st_size / (1024**3)
         total_size += size
         console.print(f"  {ckpt} ({size:.2f} GB)")
 
     console.print(f"\n[bold]Total:[/bold] {total_size:.2f} GB")
 
-    # Confirm deletion
     if confirm:
         should_delete = typer.confirm("\nDelete these files?")
         if not should_delete:
             console.print("[yellow]Cancelled[/yellow]")
             raise typer.Exit(0)
 
-    # Delete files
     for ckpt in checkpoint_files:
         ckpt.unlink()
         console.print(f"[red]✗[/red] Deleted {ckpt.name}")

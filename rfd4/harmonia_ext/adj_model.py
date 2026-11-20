@@ -23,10 +23,10 @@ class HarmoniaLocalLatentsTransformer(LocalLatentsTransformer):
     """Released denoiser + zero-init block-adjacency pair input."""
 
     def __init__(self, **kwargs):
-        kwargs.pop("adj", None)                          # optional nn.adj config block; not forwarded to the base class
+        kwargs.pop("adj", None)
         super().__init__(**kwargs)
         self.adj_embed = nn.Embedding(N_ADJ_ROWS, self.pair_repr_dim)
-        nn.init.zeros_(self.adj_embed.weight)            # step 0 reproduces the released model exactly
+        nn.init.zeros_(self.adj_embed.weight)
 
     def _run_trunk(self, input, s_init, z_init, c, seq_mask):
         a = input.get("adj_state")

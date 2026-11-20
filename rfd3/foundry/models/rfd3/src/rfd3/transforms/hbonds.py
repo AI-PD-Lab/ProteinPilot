@@ -21,7 +21,6 @@ ranked_logger = RankedLogger()
 HYDROGEN_LIKE_SYMBOLS = ("H", "H2", "D", "T")
 
 
-# TODO: Once the cifutils submodule is bumped, we can use the built-in add_hydrogen_atom_positions function
 def add_hydrogen_atom_positions(
     atom_array: AtomArray | AtomArrayStack,
 ) -> AtomArray | AtomArrayStack:
@@ -41,7 +40,6 @@ def add_hydrogen_atom_positions(
                 ccd_array.atom_name.tolist().index(atom.atom_name)
             ].charge
         except Exception:
-            ## res_name not found in ccd or atom_name not found in ccd_array
             charge = 0
         return charge
 
@@ -49,7 +47,6 @@ def add_hydrogen_atom_positions(
         charges = np.vectorize(_get_charge_from_ccd_code)(atom_array)
         atom_array.set_annotation("charge", charges)
 
-    # Add as a custom annotation
 
     array = remove_hydrogens(atom_array)
 
@@ -87,15 +84,12 @@ def add_hydrogen_atom_positions(
     def _handle_nan_coords(atom_array, noise_level=1e-3):
         coords = atom_array.coord
 
-        # Find NaNs
         nan_mask = np.isnan(coords)
 
-        # Replace NaNs with 0 + small random offset
         coords[nan_mask] = np.random.uniform(
             -noise_level, noise_level, size=nan_mask.sum()
         )
 
-        # Update atom_array in-place
         atom_array.coord = coords
         return atom_array, nan_mask
 
@@ -105,10 +99,8 @@ def add_hydrogen_atom_positions(
             if old_arr.bonds is None:
                 old_arr.bonds = struc.connect_via_distances(old_arr)
 
-            ## give some values to nan
             old_arr, nan_mask = _handle_nan_coords(old_arr)
             arr, mask = hydride.add_hydrogen(old_arr)
-            ## put back nans
             arr.coord[mask, :][nan_mask] = np.nan
             arr = _copy_missing_annotations_residue_wise(
                 old_arr, arr, fields_to_copy_from_residue_if_present
@@ -120,10 +112,8 @@ def add_hydrogen_atom_positions(
     elif isinstance(array, AtomArray):
         if array.bonds is None:
             array.bonds = struc.connect_via_distances(array)
-        ## give some values to nan
         array, nan_mask = _handle_nan_coords(array)
         arr, mask = hydride.add_hydrogen(array)
-        ## put back nans
         arr.coord[mask, :][nan_mask] = np.nan
         ret_array = _copy_missing_annotations_residue_wise(
             array, arr, fields_to_copy_from_residue_if_present
@@ -168,27 +158,22 @@ def calculate_hbonds(
 
 
     """
-    # Remove NaN coordinates
     has_resolved_coordinates = ~np.isnan(atom_array.coord).any(axis=-1)
     nonNaN_array = atom_array[has_resolved_coordinates]
 
-    # update selections if any
     if selection1 is not None:
         selection1 = selection1[has_resolved_coordinates]
     if selection2 is not None:
         selection2 = selection2[has_resolved_coordinates]
 
-    ## index map from nonNaN_array to original
     index_map = {
         counter: i for counter, i in enumerate(has_resolved_coordinates.nonzero()[0])
     }
 
     if selection1.sum() == 0 or selection2.sum() == 0:
-        # no ligand, or ligand is of same type as selection1 (e.g. 6) (peptide)
         triplets = np.array([])
     else:
-        # Compute H bonds
-        triplets = struc.hbond(  ## assuming AtomArray, not AtomArrayStack (returns an extra masks in that case)
+        triplets = struc.hbond(
             nonNaN_array,
             selection1=selection1,
             selection2=selection2,
@@ -200,11 +185,9 @@ def calculate_hbonds(
             periodic=periodic,
         )
 
-    ## map back triplet indices, nonNaN indices to original indices
     flattened = triplets.flatten()
     triplets = np.array([index_map[i] for i in flattened]).reshape(-1, 3)
 
-    ## add back NaNs
 
     donor_array = np.array([[0.0] * len(atom_array)])
     acceptor_array = np.array([[0.0] * len(atom_array)])
@@ -213,7 +196,6 @@ def calculate_hbonds(
         donor_array[:, triplets[:, 0]] = 1.0
         acceptor_array[:, triplets[:, 2]] = 1.0
 
-    ## [is_active_donor, is_active_acceptor] per atom
     types = np.vstack((donor_array, acceptor_array)).T
 
     return triplets, types, atom_array
@@ -260,8 +242,6 @@ class CalculateHbonds(Transform):
         check_is_instance(data, "atom_array", AtomArray)
         check_atom_array_annotation(data, ["res_name"])
 
-        ## turn off cause H addition debug ongoing
-        # check_atom_array_has_hydrogen(data)
 
     def forward(self, data: dict) -> dict:
         """
@@ -296,7 +276,6 @@ class CalculateHbonds(Transform):
             data["atom_array"] = atom_array
             return data
 
-        ## These are the only two use-cases we have so far. Can be extended as needed
 
         if data["sampled_condition_name"] == "ppi":
             selection1_chain_types = ["POLYPEPTIDE(D)", "POLYPEPTIDE(L)"]
@@ -310,12 +289,10 @@ class CalculateHbonds(Transform):
         selection1 = np.isin(atom_array.chain_type, selection1_chain_types)
         selection2 = np.isin(atom_array.chain_type, selection2_chain_types)
 
-        # Optionally restrict to Hbonds between motif and diffused regions
         if separate_selections_for_motif_and_diffused:
             selection1 = selection1 & atom_array.is_motif_atom
             selection2 = selection2 & ~atom_array.is_motif_atom
         else:
-            # Include fixed motif atoms for hbond calculations
             selection2 |= np.array(atom_array.is_motif_atom, dtype=bool)
             selection1 = ~selection2
 
@@ -331,15 +308,12 @@ class CalculateHbonds(Transform):
             periodic=self.periodic,
         )
 
-        # Initialize log_dict if not present
         data.setdefault("log_dict", {})
         log_dict = data["log_dict"]
 
-        # Log hbond statistics
         log_dict["hbond_total_count"] = len(hbonds)
         log_dict["hbond_total_atoms"] = hbond_types.sum()
 
-        # Subsample if hbond_subsample is set and number of atoms is bigger than 3
         final_hbond_types = hbond_types
         final_hbond_types[:, 0] = final_hbond_types[:, 0] * np.array(
             atom_array.is_motif_atom
@@ -349,24 +323,20 @@ class CalculateHbonds(Transform):
         )
 
         if data["conditions"]["hbond_subsample"] and np.sum(hbond_types) > 3:
-            # Linear correlation: fewer hbonds = higher fraction
-            base_fraction = 0.1  # minimum fraction (when many hbonds)
-            max_fraction = 0.9  # maximum fraction (when few hbonds)
+            base_fraction = 0.1
+            max_fraction = 0.9
             n_hbonds = len(hbonds)
-            max_hbonds = 50  # Expected maximum number of hbonds for scaling
+            max_hbonds = 50
 
-            # Linear interpolation: fraction decreases linearly with number of hbonds
             fraction = max_fraction - (max_fraction - base_fraction) * min(
                 n_hbonds / max_hbonds, 1.0
             )
             final_hbond_types = subsample_one_hot_np(hbond_types, fraction)
 
-        # Set annotations and log subsample atoms
         atom_array.set_annotation("active_donor", final_hbond_types[:, 0])
         atom_array.set_annotation("active_acceptor", final_hbond_types[:, 1])
         log_dict["hbond_subsample_atoms"] = final_hbond_types.sum()
 
-        # Remove hydrogens after processing
         atom_array = remove_hydrogens(atom_array)
         data["log_dict"] = log_dict
         data["atom_array"] = atom_array
@@ -387,20 +357,17 @@ def subsample_one_hot_np(array, fraction):
     if not (0 < fraction <= 1):
         raise ValueError("Fraction must be in the range (0, 1].")
 
-    array = array.copy()  # Don't modify original
+    array = array.copy()
     one_indices = np.argwhere(array == 1)
     num_ones = len(one_indices)
 
     keep_count = int(num_ones * fraction)
 
-    # Shuffle and choose a subset of indices to keep
     np.random.shuffle(one_indices)
     keep_indices = one_indices[:keep_count]
 
-    # Create new zero array
     new_array = np.zeros_like(array)
 
-    # Set selected indices to 1
     for i, j in keep_indices:
         new_array[i, j] = 1
 

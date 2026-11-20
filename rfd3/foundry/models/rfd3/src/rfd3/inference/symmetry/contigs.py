@@ -29,7 +29,6 @@ def expand_contig_unsym_motif(unsym_motif_names):
     expanded_contigs = [
         expand_contig_to_resid_from_string(n) for n in unsym_motif_names if "-" in n
     ]
-    # now remove any unexpanded contigs
     unsym_motif_names = [n for n in unsym_motif_names if "-" not in n]
     if len(expanded_contigs) != 0:
         for c in expanded_contigs:

@@ -51,17 +51,15 @@ class TokenInitializer(nn.Module):
         token_1d_features,
         atom_1d_features,
         atom_transformer,
-        use_chunked_pll=False,  # New parameter for memory optimization
-        ss_conditioning=None,   # Optional Fourier ss_ratio encoder config
-        ss_adapter=None,        # Optional SS label adapter config (dict with key 'enabled')
-        adj_adapter=None,       # Optional ADJ matrix adapter config (dict with key 'enabled')
+        use_chunked_pll=False,
+        ss_conditioning=None,
+        ss_adapter=None,
+        adj_adapter=None,
     ):
         super().__init__()
 
-        # Store chunked mode flag
         self.use_chunked_pll = use_chunked_pll
 
-        # Optional Fourier ss_ratio encoder
         if ss_conditioning is not None:
             from rfd3.model.layers.ss_conditioning import SSRatioEncoder
             self.ss_encoder = SSRatioEncoder(
@@ -71,21 +69,18 @@ class TokenInitializer(nn.Module):
         else:
             self.ss_encoder = None
 
-        # Optional SS label adapter (zero-initialized, additive into S_I)
         if ss_adapter is not None and ss_adapter.get("enabled", False):
             from rfd3.model.layers.ss_adj_adapters import SSAdapter
             self.ss_adapter = SSAdapter(c_s=c_s)
         else:
             self.ss_adapter = None
 
-        # Optional ADJ matrix adapter (zero-initialized, additive into Z_init_II)
         if adj_adapter is not None and adj_adapter.get("enabled", False):
             from rfd3.model.layers.ss_adj_adapters import ADJAdapter
             self.adj_adapter = ADJAdapter(c_z=c_z)
         else:
             self.adj_adapter = None
 
-        # Features
         self.atom_1d_embedder_1 = OneDFeatureEmbedder(atom_1d_features, c_s)
         self.atom_1d_embedder_2 = OneDFeatureEmbedder(atom_1d_features, c_atom)
         self.token_1d_embedder = OneDFeatureEmbedder(token_1d_features, c_s)
@@ -98,7 +93,6 @@ class TokenInitializer(nn.Module):
             linearNoBias(c_s, c_s),
         )
 
-        # Operations to mix into Z_II and S_I
         self.to_z_init_i = linearNoBias(c_s, c_z)
         self.to_z_init_j = linearNoBias(c_s, c_z)
         self.relative_position_encoding = RelativePositionEncodingWithIndexRemoval(
@@ -109,7 +103,6 @@ class TokenInitializer(nn.Module):
         )
         self.process_token_bonds = linearNoBias(1, c_z)
 
-        # Processing of Z_init
         self.process_z_init = nn.Sequential(
             RMSNorm(c_z * 2),
             linearNoBias(c_z * 2, c_z),
@@ -122,7 +115,6 @@ class TokenInitializer(nn.Module):
         )
         self.ref_pos_embedder_tok = PositionPairDistEmbedder(c_z, embed_frame=False)
 
-        # Pairformer without triangle updates
         self.transformer_stack = nn.ModuleList(
             [
                 PairformerBlock(c_s=c_s, c_z=c_z, **pairformer_block)
@@ -130,8 +122,6 @@ class TokenInitializer(nn.Module):
             ]
         )
 
-        #############################################################################
-        # Token track processing
         self.process_s_trunk = nn.Sequential(RMSNorm(c_s), linearNoBias(c_s, c_atom))
         self.process_single_l = nn.Sequential(
             nn.ReLU(), linearNoBias(c_atom, c_atompair)
@@ -141,7 +131,6 @@ class TokenInitializer(nn.Module):
         )
         self.process_z = nn.Sequential(RMSNorm(c_z), linearNoBias(c_z, c_atompair))
 
-        # ALWAYS create these MLPs - they will be shared between chunked and standard modes
         self.motif_pos_embedder = SinusoidalDistEmbed(c_atompair=c_atompair)
         self.ref_pos_embedder = PositionPairDistEmbedder(c_atompair, embed_frame=False)
         self.pair_mlp = nn.Sequential(
@@ -153,9 +142,7 @@ class TokenInitializer(nn.Module):
             linearNoBias(c_atompair, c_atompair),
         )
 
-        # Atom pair feature processing
         if self.use_chunked_pll:
-            # Share trained components so chunked inference uses same weights as full training.
             motif_pos_embedder = ChunkedSinusoidalDistEmbed(
                 embedder_instance=self.motif_pos_embedder
             )
@@ -181,15 +168,6 @@ class TokenInitializer(nn.Module):
         else:
             self.atom_transformer = None
 
-        # Post-processing
-        # self.process_s_post = nn.Sequential(
-        #     RMSNorm(c_s),
-        #     linearNoBias(c_s, c_s),
-        # )
-        # self.process_z_post = nn.Sequential(
-        #     RMSNorm(c_z),
-        #     linearNoBias(c_z, c_z),
-        # )
 
     def forward(self, f):
         """
@@ -201,26 +179,21 @@ class TokenInitializer(nn.Module):
         I = len(f["restype"])
 
         def init_tokens():
-            # Embed token features
             S_I = self.token_1d_embedder(f, I)
             S_I = S_I + self.transition_post_token(S_I)
 
-            # Embed atom features and downcast to token features
             S_I = self.downcast_atom(
                 Q_L=self.atom_1d_embedder_1(f, L), A_I=S_I, tok_idx=tok_idx
             )
             S_I = S_I + self.transition_post_atom(S_I)
             S_I = self.process_s_init(S_I)
 
-            # Inject Fourier-encoded ss_ratio conditioning (additive, zero-init = safe warm start)
             if self.ss_encoder is not None and "ss_ratio" in f:
                 S_I = S_I + self.ss_encoder(f["ss_ratio"])
 
-            # Inject per-residue SS labels (additive, zero-init = safe warm start)
             if self.ss_adapter is not None and "ss_labels" in f:
                 S_I = S_I + self.ss_adapter(f["ss_labels"])
 
-            # Embed Z_II
             Z_init_II = self.to_z_init_i(S_I).unsqueeze(-3) + self.to_z_init_j(
                 S_I
             ).unsqueeze(-2)
@@ -229,11 +202,9 @@ class TokenInitializer(nn.Module):
                 f["token_bonds"].unsqueeze(-1).float()
             )
 
-            # Inject pairwise ADJ matrix (additive, zero-init = safe warm start)
             if self.adj_adapter is not None and "adj_matrix" in f:
                 Z_init_II = Z_init_II + self.adj_adapter(f["adj_matrix"])
 
-            # Embed reference coordinates of ligands
             token_id = f["ref_space_uid"][f["is_ca"]]
             valid_mask = (token_id.unsqueeze(-1) == token_id.unsqueeze(-2)).unsqueeze(
                 -1
@@ -242,11 +213,9 @@ class TokenInitializer(nn.Module):
                 f["ref_pos"][f["is_ca"]], valid_mask
             )
 
-            # Run a small transformer to provide position encodings to single.
             for block in self.transformer_stack:
                 S_I, Z_init_II = block(S_I, Z_init_II)
 
-            # Also cat the relative position encoding and mix
             Z_init_II = torch.cat(
                 [
                     Z_init_II,
@@ -266,8 +235,6 @@ class TokenInitializer(nn.Module):
             C_L = Q_L_init + self.process_s_trunk(S_init_I)[..., tok_idx, :]
 
             if self.use_chunked_pll:
-                # Precompute static MLP projections once so forward_chunked can
-                # skip those MLP calls at every subsequent diffusion step.
                 self.chunked_pairwise_embedder.cache_static_projections(C_L, Z_init_II)
                 return {
                     "Q_L_init": Q_L_init,
@@ -277,22 +244,17 @@ class TokenInitializer(nn.Module):
                     "Z_II": Z_init_II,
                 }
             else:
-                # Original full P_LL computation
-                ##################################################################################
-                # Embed motif coordinates
                 valid_mask = (
                     f["is_motif_atom_with_fixed_coord"].unsqueeze(-1)
                     & f["is_motif_atom_with_fixed_coord"].unsqueeze(-2)
                 ).unsqueeze(-1)
                 P_LL = self.motif_pos_embedder(
                     f["motif_pos"], valid_mask
-                )  # (L, L, c_atompair)
+                )
 
-                # Embed ref pos
                 atoms_in_same_token = (
                     f["ref_space_uid"].unsqueeze(-1) == f["ref_space_uid"].unsqueeze(-2)
                 ).unsqueeze(-1)
-                # Only consider ref_pos for atoms given seq (otherwise ref_pos is 0, doesn't make sense to compute)
                 atoms_has_seq = (
                     f["is_motif_atom_with_fixed_seq"].unsqueeze(-1)
                     & f["is_motif_atom_with_fixed_seq"].unsqueeze(-2)
@@ -300,7 +262,6 @@ class TokenInitializer(nn.Module):
                 valid_mask = atoms_in_same_token & atoms_has_seq
                 P_LL = P_LL + self.ref_pos_embedder(f["ref_pos"], valid_mask)
 
-                ##################################################################################
 
                 P_LL = P_LL + (
                     self.process_single_l(C_L).unsqueeze(-2)
@@ -313,7 +274,6 @@ class TokenInitializer(nn.Module):
                 P_LL = P_LL + self.pair_mlp(P_LL)
                 P_LL = P_LL.contiguous()
 
-                # Pool P_LL to token level to provide atom-level resolution for token track
                 pooled_atom_level_features = pairwise_mean_pool(
                     pairwise_atom_features=self.process_pll(P_LL).unsqueeze(0),
                     atom_to_token_map=tok_idx,
@@ -322,7 +282,6 @@ class TokenInitializer(nn.Module):
                 ).squeeze(0)
                 Z_init_II = Z_init_II + self.project_pll(pooled_atom_level_features)
 
-                # Mix atom conditioning features via sequence-local attention
                 if exists(self.atom_transformer):
                     C_L = self.atom_transformer(
                         C_L.unsqueeze(0), None, P_LL, indices=None, f=f, X_L=None
@@ -357,7 +316,6 @@ class DiffusionTokenEncoder(nn.Module):
     ):
         super().__init__()
 
-        # Sequence processing
         self.transition_1 = nn.ModuleList(
             [
                 Transition(c=c_s, n=2),
@@ -365,8 +323,7 @@ class DiffusionTokenEncoder(nn.Module):
             ]
         )
 
-        # Post-processing of z
-        self.n_bins_distogram = 65  # n bins for both self distogram and distogram
+        self.n_bins_distogram = 65
         n_bins_noise = self.n_bins_distogram
         self.use_self = use_self
         self.use_distogram = use_distogram
@@ -400,7 +357,6 @@ class DiffusionTokenEncoder(nn.Module):
             ]
         )
 
-        # Pairformer without triangle updates
         self.pairformer_stack = nn.ModuleList(
             [
                 PairformerBlock(c_s=c_s, c_z=c_z, **pairformer_block)
@@ -420,21 +376,20 @@ class DiffusionTokenEncoder(nn.Module):
             for b in range(2):
                 S_I = S_I + self.transition_1[b](S_I)
 
-            Z_II = Z_init_II.unsqueeze(0).expand(B, -1, -1, -1)  # B, I, I, c_z
+            Z_II = Z_init_II.unsqueeze(0).expand(B, -1, -1, -1)
 
             Z_II_list = [Z_II]
             if self.use_distogram:
-                # Noise / self conditioning pair
                 if self.use_sinusoidal_distogram_embedder:
                     mask = f["is_motif_atom_with_fixed_coord"][f["is_ca"]]
                     mask = (mask[None, :] != mask[:, None]).unsqueeze(
                         -1
-                    )  # remove off-diagonals where distances don't make sense across time
+                    )
                     D_LL = self.dist_embedder(R_L[..., f["is_ca"], :], ~mask)
                 else:
                     D_LL = self.bucketize_fn(
                         R_L[..., f["is_ca"], :]
-                    )  # [B, L, I, n_bins]
+                    )
                 Z_II_list.append(D_LL)
             if self.use_self:
                 D_II_self = kwargs.get("D_II_self")
@@ -447,13 +402,11 @@ class DiffusionTokenEncoder(nn.Module):
                 Z_II_list.append(D_II_self)
             Z_II = torch.cat(Z_II_list, dim=-1)
 
-            # Flatten concatenated dims
             Z_II = self.process_z(Z_II)
 
             for b in range(2):
                 Z_II = Z_II + self.transition_2[b](Z_II)
 
-            # Pairformer to mix
             for block in self.pairformer_stack:
                 S_I, Z_II = block(S_I, Z_II)
 

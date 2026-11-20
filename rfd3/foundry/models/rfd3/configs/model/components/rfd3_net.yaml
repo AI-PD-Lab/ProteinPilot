@@ -5,12 +5,11 @@ c_z: 128
 c_atom: 128
 c_atompair: 16
 
-token_initializer: # formerly known as the trunk
+token_initializer:
   relative_position_encoding:
     r_max: 32
     s_max: 2
   
-  # Attention pair biases without batch dimensions
   n_pairformer_blocks: 2
   pairformer_block:
     use_triangle_attn: false
@@ -25,20 +24,12 @@ token_initializer: # formerly known as the trunk
     ref_plddt: 1
     is_non_loopy: 1
 
-  # Fourier ss_ratio encoder — injected additively into S_I after process_s_init.
-  # ss_ratio is NOT in token_1d_features; FeaturizeAtoms writes it to feats directly
-  # so OneDFeatureEmbedder never sees it.
   ss_conditioning:
     num_freqs: 16
 
-  # Zero-initialized SS label adapter (helix/strand/loop per residue → S_I).
-  # Set enabled: true to activate. Safe to load pre-trained checkpoints without
-  # these keys present — adapter contributes zero until weights are trained.
   ss_adapter:
     enabled: false
 
-  # Zero-initialized ADJ matrix adapter (pairwise contacts → Z_init_II).
-  # Set enabled: true to activate. Same zero-init warm-start guarantee.
   adj_adapter:
     enabled: false
 
@@ -53,7 +44,6 @@ token_initializer: # formerly known as the trunk
     has_zero_occupancy: 1
     ref_pos: 3
     
-    # Guided features
     ref_atomwise_rasa: 3
     active_donor: 1
     active_acceptor: 1
@@ -72,15 +62,14 @@ token_initializer: # formerly known as the trunk
 diffusion_module:
   _target_: rfd3.model.RFD3_diffusion_module.RFD3DiffusionModule
   c_token: 768
-  c_t_embed: 256  # Time embedding dimension
+  c_t_embed: 256
   sigma_data: 16
   f_pred: edm
-  n_attn_seq_neighbours: 2  # include self + n flanking neighbours
+  n_attn_seq_neighbours: 2
   n_attn_keys: 128
   n_recycle: 2
   use_local_token_attention: false
   
-  # Upcast/downcast mechanisms
   upcast:
     method: cross_attention
     n_split: 3
@@ -98,9 +87,6 @@ diffusion_module:
       dropout: 0.0
       kq_norm: True
 
-  ########################################################################
-  # UNet level processing
-  ########################################################################
   atom_attention_encoder:
     n_blocks: 3
     atom_transformer_block:
@@ -109,7 +95,7 @@ diffusion_module:
       no_residual_connection_between_attention_and_transition: False
       dropout: 0.0
 
-  diffusion_token_encoder:  # encodes self conditioning information and distogram
+  diffusion_token_encoder:
     use_distogram: True
     use_self: True
     use_sinusoidal_distogram_embedder: False
@@ -125,25 +111,7 @@ diffusion_module:
 
   diffusion_transformer:
     n_block: 18
-    n_registers: 0  # 8 Idk if they do anything tbh
-    # Token-attention neighbourhood shape. These MUST match the checkpoint being
-    # loaded: LocalTokenTransformer feeds them straight into create_attention_indices
-    # as n_attn_seq_neighbours / n_attn_keys, so they define which tokens each query
-    # attends to. Weights trained under one neighbourhood and run under another are
-    # silently mis-wired -- no shape error, because these add no parameters.
-    #
-    # Leaving them unset (as this config previously did) falls back to
-    # LocalTokenTransformer's own defaults of n_local_tokens=8 / n_keys=32, which do
-    # NOT match rfd3_latest.ckpt (trained at 32 / 128). Measured effect of that
-    # mismatch on motif scaffolding, 288-residue designed chain: 30.0 chain breaks
-    # and radius of gyration 5.2 A, versus 0.5 breaks / 23.9 A once corrected --
-    # i.e. a collapsed, fragmented backbone rather than a folded protein.
-    #
-    # Toggle: set to 8 / 32 to reproduce the old (mismatched) behaviour.
-    # NOTE: `use_local_token_attention` below is NOT the toggle -- it is assigned in
-    # RFD3_diffusion_module.__init__ and never read anywhere in the repo. Local vs
-    # full attention is actually selected by the RFD3_LOW_MEMORY_MODE env var at the
-    # diffusion_transformer call site.
+    n_registers: 0
     n_local_tokens: 32
     n_keys: 128
     diffusion_transformer_block:
@@ -163,6 +131,3 @@ diffusion_module:
       no_residual_connection_between_attention_and_transition: False
       dropout: 0.10
 
-  ########################################################################
-  # 
-  ########################################################################

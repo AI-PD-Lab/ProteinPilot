@@ -14,7 +14,6 @@ from atomworks.constants import STANDARD_AA, STANDARD_DNA, STANDARD_RNA
 from atomworks.io.parser import parse_atom_array
 from atomworks.io.utils.bonds import get_inferred_polymer_bonds
 
-# from atomworks.ml.datasets.datasets import BaseDataset
 from atomworks.ml.transforms.base import TransformedDict
 from atomworks.ml.utils.token import (
     get_token_starts,
@@ -226,11 +225,6 @@ def _expand_ss_adj_tensors(
     return ss_out, adj_out, metadata
 
 
-#################################################################################
-# Custom infer_ori functions
-#################################################################################
-
-
 class LegacySpecification(BaseModel):
     """Legacy specification for compatibility with legacy input parsing."""
 
@@ -249,21 +243,14 @@ class LegacySpecification(BaseModel):
     def to_pipeline_input(self, example_id):
         atom_array, spec_dict = self.build(return_metadata=True)
 
-        # ... Forward into
         data = prepare_pipeline_input_from_atom_array(atom_array)
         data["example_id"] = example_id
 
-        # ... Wrap up with additional features
         if "extra" not in spec_dict:
             spec_dict["extra"] = {}
         spec_dict["extra"]["example_id"] = example_id
         data["specification"] = spec_dict
         return data
-
-
-# ========================================================================
-# Input specification
-# ========================================================================
 
 
 class DesignInputSpecification(BaseModel):
@@ -277,21 +264,14 @@ class DesignInputSpecification(BaseModel):
         str_min_length=1,
         extra="forbid",
     )
-    # fmt: off
-    # ========================================================================
-    # Data inputs, motif generation & selection
-    # ========================================================================
-    # Data inputs
     atom_array_input: Optional[AtomArray] = Field(None, description="Loaded atom array", exclude=True)
     input: Optional[str] =  Field(None, description="Path to input PDB/CIF file")
-    # Motif selection from input file
     contig:  Optional[InputSelection] = Field(None, description="Contig specification string (e.g. 'A1-10,B1-5')")
     unindex: Optional[InputSelection] = Field(None, 
         description="Unindexed components selection. Components to fix in the generated structure without specifying sequence index. "\
         "Components must not overlap with `contig` argument. "\
         "E.g. 'A15-20,B6-10' or dict. We recommend specifying unindexed residues as a contig string, "\
         "then using select_fixed_atoms will subset the atoms to the specified atoms")
-    # Extra args:
     length:  Optional[str] = Field(None, description="Length range as 'min-max' or int. Constrains length of contig if provided")
     ligand:  Optional[str] = Field(None, description="Ligand name or index to include in design.")
     allow_ligand_on_existing_chain: bool = Field(False, description="If True, suppress the error when a ligand shares a chain ID with the built atom array. Use with caution — chain ID is leaked to the model.")
@@ -299,10 +279,6 @@ class DesignInputSpecification(BaseModel):
     extra: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Extra metadata to include in output (useful for logging additional info in metadata)")
     dialect: int = Field(2, description="RFdiffusion3 input dialect. 1: legacy, 2: release.")
 
-    # ========================================================================
-    # Conditioning
-    # ========================================================================
-    # Sequence and coordinate conditioning
     select_fixed_atoms: Optional[InputSelection] = Field(None,
         description='''Atoms to fix coordinates for. Examples:
         - True (default when inputs provided): All atoms pulled from the input are fixed in 3d space
@@ -319,19 +295,15 @@ class DesignInputSpecification(BaseModel):
         NOTE: Excludes ligands (ligands / DNA always has fixed sequence).
     '''.replace('\t\t', '\t')
     )
-    # Assignments of conditioning annotations
-    # RASA accessibilty
     select_buried: Optional[InputSelection] = Field(None, description="Selection of RASA buried conditioning")
     select_partially_buried: Optional[InputSelection] = Field(None, description="Selection of RASA partially buried conditioning")
     select_exposed: Optional[InputSelection] = Field(None, description="Selection of RASA exposed conditioning")
-    # Hotspots & Hbonds
     select_hbond_acceptor: Optional[InputSelection] = Field(None, description="Atom-wise hydrogen bond acceptor")
     select_hbond_donor: Optional[InputSelection] = Field(None, description="Atom-wise hydrogen bond donor")
     select_hotspots: Optional[InputSelection] = Field(None, description="Atom-level or token-level hotspots for PPI")
     redesign_motif_sidechains: Union[bool, str] = Field(False,
         description="Perform fixed-backbone sequence design on when 'contig' is provided. Changes the default behaviour when not using `select_fixed_atoms`."
     )
-    # SS/ADJ fold conditioning (RFD3 extension)
     select_ss: Optional[Dict[str, str]] = Field(
         None,
         description=(
@@ -441,15 +413,9 @@ class DesignInputSpecification(BaseModel):
         ),
     )
 
-    # ========================================================================
-    # Global conditioning & symmetry
-    # ========================================================================
-    # Symmetry
     symmetry: Optional[SymmetryConfig] = Field(None, description="Symmetry specification, see docs/symmetry.md")
-    # Centering & COM guidance
     ori_token: Optional[list[float]] = Field(None, description="Origin coordinates")
     infer_ori_strategy: Optional[str] = Field(None, description="Strategy for inferring origin; `com` or `hotspots`")
-    # Additional global conditioning
     plddt_enhanced: Optional[bool] = Field(True, description="Enable pLDDT enhancement")
     is_non_loopy: Optional[bool] = Field(None, description="Non-loopy conditioning")
     ss_ratio: Optional[float] = Field(
@@ -458,22 +424,14 @@ class DesignInputSpecification(BaseModel):
         le=1.0,
         description="Global target sheet ratio E/(H+E). None leaves the model unconditional.",
     )
-    # Partial diffusion
     partial_t: Optional[float] = Field(None, ge=0.0, description="Angstroms of noise to add for partial diffusion (None turns off partial diffusion), t <= 15 recommended.")
-    # fmt: on
 
-    # ========================================================================
-    # Properties
-    # ========================================================================
 
     @property
     def is_partial_diffusion(self) -> bool:
         """Whether partial diffusion is enabled."""
         return exists(self.partial_t)
 
-    # ========================================================================
-    # Loading / saving
-    # ========================================================================
 
     @classmethod
     def from_json(cls, path):
@@ -496,15 +454,11 @@ class DesignInputSpecification(BaseModel):
             raise ValueError(f"No input specification found in json output: {path}")
 
     def get_dict_to_save(self, exclude_extra: bool = False) -> dict:
-        # Returns dictionary for saving (reproducible) outputs to json
         return self.model_dump(
             exclude_defaults=True,
             exclude={"atom_array_input"} | set({"extra"} if exclude_extra else {}),
         )
 
-    # ========================================================================
-    # Pre-Validation / canonicalization
-    # ========================================================================
 
     @model_validator(mode="before")
     @classmethod
@@ -516,7 +470,6 @@ class DesignInputSpecification(BaseModel):
         ):
             raise ValueError("Either 'input' or 'contig' / 'length' must be provided.")
 
-        # unused input check
         if exists(data.get("input")) and not (
             (
                 exists(data.get("contig"))
@@ -535,7 +488,6 @@ class DesignInputSpecification(BaseModel):
             )
 
         if not exists(data.get("partial_t")):
-            # non-partial diffusion checks
             if exists(data.get("unindex")) and not (
                 exists(data.get("contig")) or exists(data.get("length"))
             ):
@@ -543,7 +495,6 @@ class DesignInputSpecification(BaseModel):
                     "Unindex provided but neither a length nor contig was specified."
                 )
         else:
-            # partial diffusion checks
             if exists(data.get("length")):
                 raise ValueError(
                     "Length argument must not be provided during partial diffusion."
@@ -558,10 +509,8 @@ class DesignInputSpecification(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def canonicalize(cls, data: dict) -> dict:
-        # Canonicalize length argument
         data["length"] = str(data["length"]) if exists(data.get("length")) else None
 
-        # Normalize input to str
         data["input"] = str(data["input"]) if exists(data.get("input")) else None
         return data
 
@@ -569,15 +518,11 @@ class DesignInputSpecification(BaseModel):
     @classmethod
     def load_input(cls, data: dict) -> dict:
         with validator_context("load_input"):
-            # ... Find provided selections
             selections = [
-                # Motif
                 "contig",
                 "unindex",
-                # Aux
                 "select_fixed_atoms",
                 "select_unfixed_sequence",
-                # Conditioning
                 "select_buried",
                 "select_partially_buried",
                 "select_exposed",
@@ -587,7 +532,6 @@ class DesignInputSpecification(BaseModel):
             ]
             selections = [s for s in selections if s in data]
 
-            # ... Early return if no input file provided / atom array input
             if not exists(data.get("input")) and not exists(
                 data.get("atom_array_input")
             ):
@@ -599,7 +543,6 @@ class DesignInputSpecification(BaseModel):
                     )
                 return data
 
-            # ... Load atom array from input file if provided
             if exists(data["input"]):
                 if exists(data.get("atom_array_input")):
                     raise ValueError(
@@ -609,7 +552,6 @@ class DesignInputSpecification(BaseModel):
                     data["input"], cif_parser_args=data.get("cif_parser_args")
                 )["atom_array"]
 
-                # Center for symmetric design
                 if exists(data.get("symmetry")) and data["symmetry"].get("id"):
                     atom_array = center_symmetric_src_atom_array(atom_array)
 
@@ -620,7 +562,6 @@ class DesignInputSpecification(BaseModel):
 
             atom_array = data["atom_array_input"]
 
-            # ... Set defaults if not provided
             if not exists(data.get("select_fixed_atoms")):
                 data["select_fixed_atoms"] = InputSelection.from_any(
                     True, atom_array=atom_array
@@ -630,7 +571,6 @@ class DesignInputSpecification(BaseModel):
                     False, atom_array=atom_array
                 )
 
-            # Coerce selections
             for sele in selections:
                 if sele in ["contig", "unindexed_breaks"]:
                     if exists(data[sele]) and not isinstance(data[sele], str):
@@ -643,14 +583,10 @@ class DesignInputSpecification(BaseModel):
                     )
         return data
 
-    # ========================================================================
-    # Post-Validation
-    # ========================================================================
 
     @model_validator(mode="after")
     def assert_exclusivity(self):
         with validator_context("assert_exclusivity"):
-            # ... Assert and indexed do not overlap
             if exists(self.contig) and exists(self.unindex):
                 indexed_set = set(self.contig.keys())
                 unindexed_set = set(self.unindex.keys())
@@ -660,7 +596,6 @@ class DesignInputSpecification(BaseModel):
                         f"Indexed and unindexed components must not overlap, got: {overlap}"
                     )
 
-            # ... Assert mutual exclusivity of rasa binning
             exclusive_sets = [
                 ("Motifs", ("contig", "unindex")),
                 (
@@ -703,9 +638,7 @@ class DesignInputSpecification(BaseModel):
         if not exists(aa):
             return self
 
-        # ... Selections and their annotation values
         selection_fields = {
-            # field name:         (annotation name, assigned value, non-selected value)
             "select_fixed_atoms": ("is_motif_atom_with_fixed_coord", True, False),
             "select_unfixed_sequence": ("is_motif_atom_with_fixed_seq", False, True),
             "unindex": ("is_motif_atom_unindexed", True, False),
@@ -720,40 +653,32 @@ class DesignInputSpecification(BaseModel):
             k: v for k, v in selection_fields.items() if exists(getattr(self, k, None))
         }
 
-        # ... Init global
         [
             aa.set_annotation(name, np.full(aa.array_length(), val, dtype=int))
             for name, val in REQUIRED_CONDITIONING_ANNOTATION_VALUES.items()
         ]
 
-        # Application of selections to each token fn;
         def apply_selections(start, end):
             chain_id = aa.chain_id[start]
             res_id = aa.res_id[start]
 
-            # Assign all select fields to atom array annotations.
             for selection_name, (
                 annotation_name,
                 set_value,
                 default_value,
             ) in selection_fields.items():
-                # ... Get input values
                 selection = getattr(self, selection_name)
 
-                # Important line: selects from data dictionary based on src chain & res_id (Not name!)
                 atom_names_sele = selection.get(f"{chain_id}{res_id}")
 
                 if atom_names_sele is None:
                     continue
                 mask = np.isin(aa.atom_name[start:end], atom_names_sele)
                 if annotation_name in aa.get_annotation_categories():
-                    # ... Set only mask overridden features if exists in atom array
                     aa.get_annotation(annotation_name)[start:end] = np.where(
                         mask, set_value, default_value
                     ).astype(np.int_)
-                    # ).astype(int)
                 else:
-                    # ... Otherwise, set the entire annotation and use defaults for unselected
                     mask_aa = np.zeros(aa.array_length(), dtype=bool)
                     mask_aa[start:end] = mask
                     annotation_values = np.where(
@@ -763,9 +688,6 @@ class DesignInputSpecification(BaseModel):
                     ).astype(np.int_)
                     aa.set_annotation(annotation_name, annotation_values)
 
-        # --- SS label conditioning ---
-        # Initialize all tokens as unconditioned (SS_MASKED=3), then overwrite
-        # selected residues with the user-specified per-residue SS label.
         if exists(self.select_ss):
             _ss_str_to_int = {
                 "h": 0,
@@ -778,7 +700,6 @@ class DesignInputSpecification(BaseModel):
                 "loop": 2,
                 "coil": 2,
             }
-            # Default all atoms to SS_MASKED=3
             aa.set_annotation(
                 "ss_label_conditioning",
                 np.full(aa.array_length(), 3, dtype=np.int64),
@@ -794,10 +715,8 @@ class DesignInputSpecification(BaseModel):
                 if sele is not None:
                     aa.get_annotation("ss_label_conditioning")[sele.mask] = label
 
-        # ... Set default assignments per-token based on whether redesigning
         starts = get_residue_starts(aa, add_exclusive_stop=True)
         for start, end in zip(starts[:-1], starts[1:]):
-            # ... Relax sequence and sidechains
             if aa.res_name[start] in STANDARD_AA and self.redesign_motif_sidechains:
                 is_bkbn = np.isin(aa.atom_name[start:end], ["N", "CA", "C", "O"])
                 aa.is_motif_atom_with_fixed_coord[start:end] = is_bkbn.astype(int)
@@ -805,35 +724,27 @@ class DesignInputSpecification(BaseModel):
                     is_bkbn, False, dtype=int
                 )
 
-            # ... Apply selections on top
             apply_selections(start, end)
 
         return self
 
-    # ========================================================================
-    # Building
-    # ========================================================================
 
     def build(self, return_metadata=False):
         """Main build pipeline."""
         atom_array_input_annotated = copy.deepcopy(self.atom_array_input)
         atom_array = self._build_init(atom_array_input_annotated)
 
-        # Apply post-processing
         atom_array = self._append_ligand(atom_array, atom_array_input_annotated)
         atom_array = self._apply_symmetry(atom_array, atom_array_input_annotated)
 
-        # Apply globals to all tokens (including diffused)
         atom_array = self._set_origin(atom_array)
         atom_array = self._apply_globals(atom_array)
 
-        # Final validation and cleanup
         check_has_required_conditioning_annotations(
             atom_array, required=REQUIRED_INFERENCE_ANNOTATIONS
         )
         convert_existing_annotations_to_bool(atom_array)
 
-        # ... Route return type
         if not return_metadata:
             return copy.deepcopy(atom_array)
         else:
@@ -849,12 +760,8 @@ class DesignInputSpecification(BaseModel):
             }
             return copy.deepcopy(atom_array), metadata
 
-    # ============================================================================
-    # Building functions
-    # ============================================================================
 
     def _build_init(self, atom_array_input_annotated):
-        # ... Fetch tokens
         indexed_tokens = (
             self.contig.get_tokens(atom_array_input_annotated)
             if exists(self.contig)
@@ -865,7 +772,6 @@ class DesignInputSpecification(BaseModel):
             if exists(self.unindex)
             else {}
         )
-        # Subset to only fixed coordindate atoms
         unindexed_tokens = {
             k: tok[tok.is_motif_atom_with_fixed_coord.astype(bool)]
             for k, tok in unindexed_tokens.items()
@@ -873,7 +779,6 @@ class DesignInputSpecification(BaseModel):
         unindexed_components, unindexed_breaks = self.break_unindexed(self.unindex)
 
         if not self.is_partial_diffusion:
-            # ... Sample the contig string
             components_to_accumulate = get_design_pattern_with_constraints(
                 self.contig.raw if exists(self.contig) else self.length,
                 length=self.length,
@@ -882,11 +787,9 @@ class DesignInputSpecification(BaseModel):
                 [str(x) for x in components_to_accumulate]
             )
 
-            # ... Include unindexed components in accumulation
             unindexed_breaks = [None] * len(components_to_accumulate) + unindexed_breaks
             components_to_accumulate += unindexed_components
 
-            # ... Accumulate from scratch
             atom_array = accumulate_components(
                 components_to_accumulate,
                 indexed_tokens=indexed_tokens,
@@ -897,16 +800,14 @@ class DesignInputSpecification(BaseModel):
                 start_resid=1,
             )
         else:
-            # ... Set common annotations
             atom_array_in = assign_types_(copy.deepcopy(atom_array_input_annotated))
             atom_array_in = set_common_annotations(
                 atom_array_in, set_src_component_to_res_name=False
             )
 
-            # ... Override motif annotations from pipeline
             zeros = np.zeros(atom_array_in.array_length(), dtype=int)
             atom_array_in.is_motif_atom_unindexed = (
-                zeros  # reset unindexed annotation since those are copied already.
+                zeros
             )
             atom_array_in.is_motif_atom_with_fixed_coord = (
                 self.select_fixed_atoms.get_mask().astype(int)
@@ -919,22 +820,17 @@ class DesignInputSpecification(BaseModel):
                 else zeros
             ).astype(int)
 
-            # ... Subset to residues only
             atom_array_in = atom_array_in[
                 atom_array_in.is_protein | atom_array_in.is_dna | atom_array_in.is_rna
             ]
 
-            # ... Set chain ID for unindexed residues as whatever the input has
             start_resid = np.max(atom_array_in.res_id) + 1
             start_chain = atom_array_in.chain_id[0]
 
-            # ... Accumulate from input
             components_to_accumulate = unindexed_components
             atom_array = accumulate_components(
-                # No accumulation of components
                 components_to_accumulate=components_to_accumulate,
                 indexed_tokens={},
-                # Append all inputs to unindexed tokens
                 unindexed_tokens=unindexed_tokens,
                 atom_array_accum=[atom_array_in],
                 start_chain=start_chain,
@@ -944,16 +840,12 @@ class DesignInputSpecification(BaseModel):
 
         return atom_array
 
-    # ============================================================================
-    # Auxiliary functions
-    # ============================================================================
 
     @staticmethod
     def break_unindexed(unindex: InputSelection):
         if not exists(unindex):
             return [], []
 
-        # ... If original type was string, use that
         if isinstance(unindex.raw, str):
             unindexed_string = unindex.raw
         elif isinstance(unindex.raw, dict):
@@ -964,14 +856,10 @@ class DesignInputSpecification(BaseModel):
             )
             unindexed_string = ",".join(unindex.keys())
 
-        # ... Break expected unindexed contig string
         unindexed_components, breaks = get_motif_components_and_breaks(unindexed_string)
 
         return unindexed_components, breaks
 
-    # ============================================================================
-    # Setter functions
-    # ============================================================================
 
     def _append_ligand(self, atom_array, atom_array_input_annotated):
         """Append ligand if specified."""
@@ -986,8 +874,6 @@ class DesignInputSpecification(BaseModel):
                     + list(atom_array_input_annotated.get_annotation_categories())
                 ),
             )
-            # Validate chain assignments — chain ID is leaked to the model
-            # so collisions are a significant deviation from convention.
             ligand_chains = np.unique(ligand_array.chain_id)
             existing_chains = set(np.unique(atom_array.chain_id))
             overlapping = sorted(existing_chains & set(ligand_chains))
@@ -999,7 +885,6 @@ class DesignInputSpecification(BaseModel):
                         f"separate chains or set 'allow_ligand_on_existing_chain: "
                         f"true' to restore the old behaviour."
                     )
-                # Multiple ligands must each be on their own chain.
                 for chain in ligand_chains:
                     n_residues = len(
                         np.unique(ligand_array.res_id[ligand_array.chain_id == chain])
@@ -1012,7 +897,6 @@ class DesignInputSpecification(BaseModel):
                             f"the old behaviour."
                         )
             if self.allow_ligand_on_existing_chain:
-                # Legacy behaviour: offset from protein max to avoid clashes.
                 ligand_array.res_id = (
                     ligand_array.res_id
                     - np.min(ligand_array.res_id)
@@ -1020,15 +904,9 @@ class DesignInputSpecification(BaseModel):
                     + 1
                 )
             else:
-                # Reset ligand res_id to start from 1 per chain, matching
-                # the convention AF3 uses in its output CIF files.
                 for chain in ligand_chains:
                     mask = ligand_array.chain_id == chain
                     ligand_array.res_id[mask] = 1
-            # Harmonize conditioning annotations before concatenation: biotite's
-            # concatenate only preserves annotations present in ALL arrays (set
-            # intersection), so mismatched optional conditioning annotations
-            # (e.g. is_atom_level_hotspot) get silently dropped.
             for annot, default in OPTIONAL_CONDITIONING_VALUES.items():
                 if (
                     annot in ligand_array.get_annotation_categories()
@@ -1061,17 +939,6 @@ class DesignInputSpecification(BaseModel):
     def _set_origin(self, atom_array):
         """Set origin token and initialize coordinates."""
         if self.is_partial_diffusion:
-            # Partial diffusion: keep all coordinates. Centering rules:
-            #   1. If symmetric: skip centering to preserve chain spacing.
-            #   2. If the user supplied `ori_token` or `infer_ori_strategy`,
-            #      honor it (same path as regular diffusion). Previously this
-            #      branch hard-coded `ori_token=None`, silently dropping the
-            #      user's request.
-            #   3. Otherwise default to centering on the diffused-region COM
-            #      (matches training `center_option=diffuse`). Centering on the
-            #      joint target+binder COM places the binder far from origin in
-            #      a frame the model never saw at training, biasing denoising
-            #      to drag the binder toward the target's COM.
             if exists(self.symmetry) and self.symmetry.id:
                 logger.info(
                     "Partial diffusion with symmetry: skipping COM centering to preserve chain spacing"
@@ -1097,20 +964,17 @@ class DesignInputSpecification(BaseModel):
                         atom_array, ori_token=None, infer_ori_strategy="com"
                     )
         else:
-            # Standard: set ori token, zero out diffused atoms
             atom_array = set_com(
                 atom_array,
                 ori_token=self.ori_token,
                 infer_ori_strategy=self.infer_ori_strategy,
             )
-            # Diffused atoms are always initialized at origin during regular diffusion (all information removed)
             atom_array.coord[
                 ~atom_array.is_motif_atom_with_fixed_coord.astype(bool)
             ] = 0.0
         return atom_array
 
     def _apply_globals(self, atom_array):
-        # Temperature conditioning
         if exists(self.is_non_loopy):
             is_non_loopy_annot = np.zeros(atom_array.array_length(), dtype=int)
             is_motif_token = get_motif_features(atom_array)["is_motif_token"]
@@ -1137,7 +1001,6 @@ class DesignInputSpecification(BaseModel):
                 "ref_plddt", np.full((atom_array.array_length(),), True, dtype=int)
             )
 
-        # Partial diffusion time annotation
         if self.is_partial_diffusion:
             atom_array.set_annotation(
                 "partial_t", np.full(atom_array.shape[0], self.partial_t, dtype=float)
@@ -1206,12 +1069,9 @@ class DesignInputSpecification(BaseModel):
 
         atom_array, spec_dict = build_spec.build(return_metadata=True)
 
-        # ... Forward into
         data = prepare_pipeline_input_from_atom_array(atom_array)
         data["example_id"] = example_id
 
-        # --- SS/ADJ fold conditioning files ---
-        # RFD1-compatible tensors are aligned to the final RFD3 token order.
         final_aa = data["atom_array"]
         token_starts = get_token_starts(final_aa)
         n_tokens = len(token_starts)
@@ -1223,13 +1083,6 @@ class DesignInputSpecification(BaseModel):
                 "and provide it with adj_file instead."
             )
 
-        # `ss_adj_contig` lets ss_file/adj_file describe only a subset of final
-        # tokens (e.g. the diffused chain in a motif-scaffolding spec) instead
-        # of requiring a tensor entry for every final token. It's resolved
-        # against `final_aa` (the fully-assembled output), not the input PDB,
-        # since it may need to name chains that only exist after diffused
-        # positions are added -- unlike `contig`/`unindex`, which select from
-        # the input and are resolved earlier in `load_input`.
         ss_adj_token_mask = None
         if self.ss_adj_contig:
             if expansion_requested:
@@ -1279,17 +1132,7 @@ class DesignInputSpecification(BaseModel):
                 adj_matrix = _validate_adj_tensor(adj_matrix, n_tokens, self.adj_file)
             data.setdefault("feats", {})["adj_matrix"] = torch.from_numpy(adj_matrix)
 
-        # NOTE: adj_pairs is deliberately NOT resolved here. Selections are carried
-        # through in `specification` and resolved in FeaturizeSSADJ instead, because
-        # token identity is not final at this point: AtomizeByCCDName splits every
-        # ligand into one token PER ATOM and PadTokensWithVirtualAtoms adds more,
-        # both AFTER input parsing. Resolving here produced a matrix sized to
-        # residues (61) against a model expecting atomised tokens (76) for a
-        # 16-atom biotin. ss_adj_contig / adj_file below have the same latent issue
-        # for any ligand-containing system; they have simply never been used with one.
 
-
-        # ... Wrap up with additional features
         if "extra" not in spec_dict:
             spec_dict["extra"] = {}
         spec_dict["extra"]["example_id"] = example_id
@@ -1297,12 +1140,7 @@ class DesignInputSpecification(BaseModel):
         return data
 
 
-# ============================================================================
-# APIs and utils
-# ============================================================================
-
-
-def prepare_pipeline_input_from_atom_array(  # see atomworks.ml.datasets.parsers.base.load_example_from_metadata_row
+def prepare_pipeline_input_from_atom_array(
     atom_array_orig,
 ) -> dict:
     """
@@ -1315,11 +1153,9 @@ def prepare_pipeline_input_from_atom_array(  # see atomworks.ml.datasets.parsers
         dict: A dictionary containing the parsed row data and additional loaded CIF data.
     """
     _start_parse_time = time.time()
-    # HACK: Set empty bond graph:
     if atom_array_orig.bonds is None:
         atom_array_orig.bonds = BondList(atom_array_orig.array_length())
 
-    # Temporary spoof of chain IDs to ensure duplicates aren't dropped:
     result_dict = parse_atom_array(
         atom_array_orig,
         remove_ccds=[],
@@ -1331,9 +1167,6 @@ def prepare_pipeline_input_from_atom_array(  # see atomworks.ml.datasets.parsers
     )
     atom_array = result_dict["asym_unit"][0]
 
-    # HACK: Set iid information manually
-    # We currently do not preserve this information from the input,
-    # if you want these we'd need to remove the spoofing here
     check_has_required_conditioning_annotations(
         atom_array, required=REQUIRED_INFERENCE_ANNOTATIONS
     )
@@ -1341,7 +1174,6 @@ def prepare_pipeline_input_from_atom_array(  # see atomworks.ml.datasets.parsers
     atom_array.set_annotation("chain_iid", [f"{c}_1" for c in atom_array.chain_id])
     atom_array.set_annotation("pn_unit_iid", [f"{c}_1" for c in atom_array.pn_unit_id])
 
-    # Ensure motif annotations are removed
     atom_array.del_annotation(
         "is_motif_token"
     ) if "is_motif_token" in atom_array.get_annotation_categories() else None
@@ -1350,7 +1182,7 @@ def prepare_pipeline_input_from_atom_array(  # see atomworks.ml.datasets.parsers
     ) if "is_motif_atom" in atom_array.get_annotation_categories() else None
 
     data = {
-        "atom_array": atom_array,  # First model
+        "atom_array": atom_array,
         "chain_info": result_dict["chain_info"],
         "ligand_info": result_dict["ligand_info"],
         "metadata": result_dict["metadata"],
@@ -1373,7 +1205,6 @@ def create_atom_array_from_design_specification(
         atom_array = create_atom_array_from_design_specification_legacy(**spec_kwargs)
         return atom_array, {}
 
-    # Create input specfication and build
     spec = DesignInputSpecification(**spec_kwargs)
     atom_array, metadata = spec.build(return_metadata=True)
     return atom_array, metadata
@@ -1439,19 +1270,13 @@ def create_motif_residue(
                 f"Not enough data for {src_chain}{src_resid} in input atom array."
             )
         if n_atoms == 3:
-            # Handle cases with N, CA, C only;
             token = token + create_o_atoms(token.copy())
-            diffuse_oxygen = True  # flag oxygen for generation
+            diffuse_oxygen = True
 
-        # Subset to the first 4 atoms (N, CA, C, O) only
         token = token[np.isin(token.atom_name, ["N", "CA", "C", "O"])]
 
-        # exactly N, CA, C, O but no CB. Place CB onto idealized position and conver to ALA
-        # Sequence name ALA ensures the padded atoms to be diffused from the fixed backbone
-        # are placed on the CB so as to not leak the identity of the residue.
         token = token + create_cb_atoms(token.copy())
 
-        # Sequence name must be set to ALA such that the central atom is correctly CB
         token.res_name = np.full_like(token.res_name, "ALA", dtype=token.res_name.dtype)
         token.set_annotation(
             "is_motif_atom_with_fixed_coord",
@@ -1464,7 +1289,7 @@ def create_motif_residue(
 
     check_has_required_conditioning_annotations(token)
     token = set_common_annotations(token)
-    token.set_annotation("res_id", np.full(token.shape[0], 1))  # Reset to 1
+    token.set_annotation("res_id", np.full(token.shape[0], 1))
 
     return token
 
@@ -1479,7 +1304,7 @@ def _polymer_link_atoms_for_residue(res_name: str) -> set[frozenset[str]]:
     if res_name in STANDARD_AA:
         return {frozenset({"C", "N"})}
     if res_name in STANDARD_DNA or res_name in STANDARD_RNA:
-        return {frozenset({"O3'", "P"}), frozenset({"O3*", "P"})}  # allow legacy O3*
+        return {frozenset({"O3'", "P"}), frozenset({"O3*", "P"})}
     return set()
 
 
@@ -1551,7 +1376,6 @@ def _restore_component_bonds(
         return component in unindexed_components if component is not None else False
 
     def _fmt_atom(atom: struc.Atom) -> str:
-        # Use a readable residue/atom separator to avoid names running together
         return f"{atom.chain_id}{atom.res_id}:{atom.res_name}_{atom.atom_name}"
 
     for atom_i_idx, atom_j_idx, bond_type in src_bonds:
@@ -1564,8 +1388,6 @@ def _restore_component_bonds(
         atom_i = src_atom_array[atom_i_idx]
         atom_j = src_atom_array[atom_j_idx]
 
-        # If we only have one side of the bond, assert if the mapped atom is from an
-        # unindexed component and the bond would connect across residues.
         if mapped_i is None or mapped_j is None:
             if _is_standard_polymer_backbone_bond(
                 atom_i, atom_j
@@ -1597,8 +1419,6 @@ def _restore_component_bonds(
                         f"Unsupported bond between unindexed component {atom_j.chain_id}{atom_j.res_id} "
                         f"and omitted residue {atom_i.chain_id}{atom_i.res_id}."
                     )
-            # Only warn when we retained one side of a cross-residue/chain linkage
-            # (e.g., glycan partner missing), not for missing intra-residue atoms.
             if (mapped_i is not None or mapped_j is not None) and (
                 atom_i.chain_id != atom_j.chain_id or atom_i.res_id != atom_j.res_id
             ):
@@ -1612,7 +1432,6 @@ def _restore_component_bonds(
                 )
             continue
 
-        # Do not connect unindexed residues to anything else for now.
         comp_i = source_idx_to_component.get(atom_i_idx)
         comp_j = source_idx_to_component.get(atom_j_idx)
         if (comp_i in unindexed_components or comp_j in unindexed_components) and (
@@ -1678,7 +1497,6 @@ def _add_backbone_bonds_for_nonstandard_residues(
         atom_i_idx = int(atom_i_idx)
         atom_j_idx = int(atom_j_idx)
 
-        # Do not connect unindexed residues across residue boundaries
         if (unindexed_mask[atom_i_idx] or unindexed_mask[atom_j_idx]) and (
             atom_array_accum.chain_id[atom_i_idx]
             != atom_array_accum.chain_id[atom_j_idx]
@@ -1687,8 +1505,6 @@ def _add_backbone_bonds_for_nonstandard_residues(
         ):
             continue
 
-        # Only synthesize bonds when at least one residue is non-standard; standard
-        # backbone bonds should already exist.
         if _is_standard_polymer_backbone_bond(
             atom_array_accum[atom_i_idx], atom_array_accum[atom_j_idx]
         ):
@@ -1711,7 +1527,6 @@ def _add_backbone_bonds_for_nonstandard_residues(
 def _sort_bonds(atom_array_accum: struc.AtomArray) -> struc.AtomArray:
     """Sort bonds deterministically by atom indices then bond type."""
     bonds_arr = atom_array_accum.bonds.as_array().copy()
-    # ensure lower index first
     swap_mask = bonds_arr[:, 0] > bonds_arr[:, 1]
     bonds_arr[swap_mask, :2] = bonds_arr[swap_mask][:, [1, 0]]
     order = np.lexsort((bonds_arr[:, 2], bonds_arr[:, 1], bonds_arr[:, 0]))
@@ -1725,10 +1540,8 @@ def _sort_bonds(atom_array_accum: struc.AtomArray) -> struc.AtomArray:
 def accumulate_components(
     components_to_accumulate: List[Union[str, int]],
     *,
-    # Tokens from input
     indexed_tokens: Dict[str, AtomArray],
     unindexed_tokens: Dict[str, AtomArray],
-    # Additional parameters
     atom_array_accum=[],
     start_chain: str = "A",
     start_resid: int = 1,
@@ -1737,7 +1550,6 @@ def accumulate_components(
     strip_sidechains_by_default: bool = False,
     **kwargs,
 ) -> AtomArray:
-    # ... Create list of components
     assert (
         x := (set(list(indexed_tokens.keys()) + list(unindexed_tokens.keys())))
     ).issubset(
@@ -1759,9 +1571,8 @@ def accumulate_components(
         else unindexed_breaks
     )
 
-    # ... For-loop accum variables
     unindexed_components_started = (
-        False  # once one unindexed component is added, stop adding diffused residues
+        False
     )
     chain = start_chain
     res_id = start_resid
@@ -1771,7 +1582,6 @@ def accumulate_components(
     unindexed_component_names = set(unindexed_tokens.keys())
     current_accum_idx = sum(len(arr) for arr in atom_array_accum)
 
-    # ... Insert contig information one- by one-
     assert len(components_to_accumulate) == len(
         unindexed_breaks
     ), "Mismatch in number of components to accumulate and breaks"
@@ -1784,32 +1594,23 @@ def accumulate_components(
                 unindexed_components_started = True
 
         if component == "/0":
-            # Reset iterators on next chain
             chain = chr(ord(chain) + 1)
             molecule_id += 1
             res_id = 1
             continue
 
-        # ... Create array to insert
-        if str(component)[0].isalpha():  # motif (e.g. "A22")
+        if str(component)[0].isalpha():
             n = 1
 
-            # ... Fetch the motif residue
             token = all_tokens[component]
             if src_atom_array is not None:
                 src_mask = fetch_mask_from_idx(component, atom_array=src_atom_array)
                 src_indices = np.where(src_mask)[0]
-                # try:
-                # except ComponentValidationError as e:
-                #     src_indices = None
-                #     print(e)
 
-            # ... Ensure motif residues are set properly
             token = create_motif_residue(
                 token, strip_sidechains_by_default=strip_sidechains_by_default
             )
 
-            # ... Insert breakpoint when break clause is met
             if exists(is_break) and is_break:
                 token.set_annotation(
                     "is_motif_atom_unindexed_motif_breakpoint",
@@ -1821,17 +1622,13 @@ def accumulate_components(
                     np.zeros(token.shape[0], dtype=int),
                 )
         else:
-            ## foundry components update sends P for protein tokens
             n = int(component[:-1])
-            # ... Skip if none or unindexed
             if n == 0 or unindexed_components_started:
                 res_id += n
                 continue
 
-            # ... Create diffused residues
             token = create_diffused_residues(n, all_annots)
 
-        # ... Set index of insertion
         token = set_indices(
             array=token,
             chain=chain,
@@ -1854,12 +1651,10 @@ def accumulate_components(
                 source_to_accum_idx[int(src_idx)] = current_accum_idx + i
                 source_idx_to_component[int(src_idx)] = str(component)
 
-        # ... Insert & Increment residue ID
         atom_array_accum.append(token)
         res_id += n
         current_accum_idx += len(token)
 
-    # ... Concatenate all components
     atom_array_accum = struc.concatenate(atom_array_accum)
     atom_array_accum.set_annotation("pn_unit_iid", atom_array_accum.chain_id)
     should_restore_bonds = (
@@ -1882,7 +1677,6 @@ def accumulate_components(
         )
         atom_array_accum = _sort_bonds(atom_array_accum)
 
-    # Reset res_id for unindexed residues to avoid duplicates (ridiculously long lines of code, cleanup later)
     if np.any(atom_array_accum.is_motif_atom_unindexed.astype(bool)) and not np.all(
         atom_array_accum.is_motif_atom_unindexed.astype(bool)
     ):
@@ -1900,7 +1694,6 @@ def accumulate_components(
             atom_array_accum.is_motif_atom_unindexed.astype(bool)
         ] += max_id - min_id_udx + 1
 
-    # ... Bonds
     if atom_array_accum.bonds is None:
         atom_array_accum.bonds = BondList(atom_array_accum.array_length())
     return atom_array_accum

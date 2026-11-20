@@ -109,13 +109,10 @@ from rfd3.transforms.virtual_atoms import PadTokensWithVirtualAtoms
 
 from foundry.common import exists
 
-######################################################################################
-# Common transforms
-######################################################################################
 af3_sequence_encoding = AF3SequenceEncoding()
 
 
-IPDB  # noqa
+IPDB
 
 
 def TrainingRoute(transform):
@@ -154,21 +151,16 @@ def get_pre_crop_transforms(
         RemoveHydrogens(),
         FilterToSpecifiedPNUnits(
             extra_info_key_with_pn_unit_iids_to_keep="all_pn_unit_iids_after_processing"
-        ),  # Filter to non-clashing PN units
+        ),
         RemoveTerminalOxygen(),
-        # ... Remove PN units that are unresolved early (and also after cropping)
         TrainingRoute(SetOccToZeroOnBfactor(b_factor_min, None)),
         RemoveUnresolvedPNUnits(),
-        # ... Remove polymers with too few resolved residues
         TrainingRoute(RemovePolymersWithTooFewResolvedResidues(min_residues=4)),
         MaskPolymerResiduesWithUnresolvedFrameAtoms(),
-        # Only filter out undesired res names during training, since it's intentional if they're in the input during inference.
         TrainingRoute(HandleUndesiredResTokens(AF3_EXCLUDED_LIGANDS)),
-        # ... Bulk removal of unresolved atoms
         TrainingRoute(
             RemoveUnresolvedLigandAtomsIfTooMany(unresolved_ligand_atom_limit=5)
         ),
-        # Filter out tokens without a central atom during training, Padding during inference ensures each residue has a central atom
         TrainingRoute(
             RemoveTokensWithoutCorrespondingCentralAtom(central_atom=central_atom),
         ),
@@ -266,7 +258,6 @@ def get_crop_transform(
     )
 
     post_crop_transforms = [
-        # ... Handling of remaining unresolved residues (NOTE: usually best done after inputs are processed.)
         TrainingRoute(
             PlaceUnresolvedTokenAtomsOnRepresentativeAtom(annotation_to_update="coord")
         ),
@@ -296,12 +287,8 @@ def get_diffusion_transforms(
     return [
         ComputeAtomToTokenMap(),
         ConvertToTorch(keys=["encoded", "feats"]),
-        # Prepare coordinates for noising (without modifying the ground truth)
-        # ...add placeholder coordinates for noising
         CopyAnnotation(annotation_to_copy="coord", new_annotation="coord_to_be_noised"),
-        # Feature aggregation
         AggregateFeaturesLikeAF3WithoutMSA(),
-        # ...batching and noise sampling for diffusion
         BatchStructuresForDiffusionNoising(batch_size=diffusion_batch_size),
         SampleEDMNoise(
             sigma_data=sigma_data, diffusion_batch_size=diffusion_batch_size
@@ -309,17 +296,10 @@ def get_diffusion_transforms(
     ]
 
 
-######################################################################################
-# Pipelines
-######################################################################################
-
-
 def build_atom14_base_pipeline_(
     *,
-    # Training or inference (required)
-    is_inference: bool,  # If True, we skip cropping, etc.
+    is_inference: bool,
     return_atom_array: bool,
-    # Crop params
     allowed_types: List[str],
     crop_size: int,
     crop_center_cutoff_distance: float,
@@ -327,14 +307,12 @@ def build_atom14_base_pipeline_(
     crop_spatial_probability: float,
     dna_contact_crop_probability: float,
     keep_full_binder_in_spatial_crop: bool,
-    max_binder_length: int,  # Only relevant when keep_full_binder_in_spatial_crop is True
+    max_binder_length: int,
     max_atoms_in_crop: int | None,
     b_factor_min: float | None,
     zero_occ_on_exposure_after_cropping: bool,
-    # Training Hypers
     sigma_data: float,
     diffusion_batch_size: int,
-    # Reference conformer policy
     generate_conformers: bool,
     generate_conformers_for_non_protein_only: bool,
     provide_reference_conformer_when_unmasked: bool,
@@ -342,10 +320,8 @@ def build_atom14_base_pipeline_(
     provide_elements_for_unindexed_components: bool,
     use_element_for_atom_names_of_atomized_tokens: bool,
     residue_cache_dir: bool,
-    # Conditioning
     train_conditions: dict,
     meta_conditioning_probabilities: dict,
-    # Atom14/Model
     n_atoms_per_token: int,
     central_atom: str,
     sigma_perturb: float,
@@ -354,23 +330,14 @@ def build_atom14_base_pipeline_(
     center_option: str,
     atom_1d_features: dict | None,
     token_1d_features: dict | None,
-    # PPI features
     max_ppi_hotspots_frac_to_provide: float,
     ppi_hotspot_max_distance: float,
-    # Secondary structure features
     max_ss_frac_to_provide: float,
     min_ss_island_len: int,
     max_ss_island_len: int,
-    # SS/ADJ adapter conditioning
     ss_adj_enabled: bool = False,
     ss_adj_loop_adj: bool = False,
-    # Molecule-type-aware adjacency: ligands and nucleic acids get their own block
-    # segmentation (ligand = entity, NA = helical turns spanning both strands) and
-    # heavy-atom contact cutoffs, instead of inheriting the protein loop rule.
     ss_adj_typed_blocks: bool = False,
-    # Fraction of motif-bearing examples whose motif tokens have SS/ADJ stripped.
-    # 0.5 deletes the binder<->target adjacency signal in half of exactly the
-    # examples that teach binder design.
     ss_adj_motif_region_mask_prob: float = 0.5,
     ss_adj_cross_chain_seed_prob: float = 0.0,
     ss_adj_cb_threshold: float = 6.0,
@@ -378,7 +345,7 @@ def build_atom14_base_pipeline_(
     ss_adj_min_loop_contact_pairs: int = 3,
     ss_adj_mask_loop_pairs: bool = True,
     reject_short_multichain_local_tokens: bool = False,
-    **_,  # dump additional kwargs (e.g. msa stuff)
+    **_,
 ):
     """
     All-Atom design pipeline
@@ -386,7 +353,6 @@ def build_atom14_base_pipeline_(
     warnings.filterwarnings("ignore", category=RuntimeWarning)
     warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-    # Add any data necessary for downstream transforms
     transforms = [
         AddData(
             {
@@ -397,7 +363,6 @@ def build_atom14_base_pipeline_(
         ),
         AssignTypes(),
     ]
-    # During training, sample condition | adds 'condition': TrainingCondition to data dict
     transforms += [
         TrainingRoute(
             SampleConditioningType(
@@ -408,7 +373,6 @@ def build_atom14_base_pipeline_(
         ),
     ]
 
-    # Pre-crop transforms
     transforms += get_pre_crop_transforms(
         central_atom=central_atom,
         b_factor_min=b_factor_min,
@@ -429,23 +393,17 @@ def build_atom14_base_pipeline_(
     )
 
     if zero_occ_on_exposure_after_cropping:
-        # Optional: Zero out sidechain occupancy for atoms that have become exposed
         transforms.append(TrainingRoute(SetZeroOccOnDeltaRASA()))
     else:
-        # RASA calculated after cropping
         transforms.append(
             TrainingConditionRoute(
                 "calculate_rasa", CalculateRASA(requires_ligand=True)
             )
         )
-    # Need condition flags to add is motif atom annotations before hbond in order to enable using full motif for hbonds
 
-    # ... Add global token features (since number of tokens is fixed after cropping)
     transforms.append(AddGlobalTokenIdAnnotation())
-    # ... Create masks (NOTE: Modulates token count, and resets global token id if necessary)
     transforms.append(TrainingRoute(SampleConditioningFlags()))
 
-    # Post-crop transforms
     transforms.append(
         TrainingConditionRoute(
             "calculate_hbonds",
@@ -456,26 +414,20 @@ def build_atom14_base_pipeline_(
         )
     )
 
-    # Design Transforms
     transforms += [
         LoadCachedResidueLevelData(
             dir=Path(residue_cache_dir) if exists(residue_cache_dir) else None,
             sharding_depth=1,
         ),
-        # ... Fuse inference and training conditioning assignments
         UnindexFlaggedTokens(central_atom=central_atom),
-        # ... Virtual atom padding (NOTE: Last transform which modulates atom count)
         PadTokensWithVirtualAtoms(
             n_atoms_per_token=n_atoms_per_token,
             atom_to_pad_from=central_atom,
             association_scheme=association_scheme,
-        ),  # 0.1 s
-        # The baseline local-token attention reserves 32 inter-chain keys for
-        # 4+ chains; reject shorter crops while dataset fallback is available.
+        ),
         TrainingRoute(RejectShortMultichainLocalTokenExamples())
         if reject_short_multichain_local_tokens
         else Identity(),
-        # Possibly add hotspots
         TrainingRoute(
             ConditionalRoute(
                 condition_func=lambda data: data["sampled_condition_name"] == "ppi"
@@ -500,8 +452,6 @@ def build_atom14_base_pipeline_(
                 },
             )
         ),
-        # AddGlobalIsNonLoopyFeature writes the global ss_ratio annotation that
-        # Add1DSSFeature converts into the token-level model feature.
         TrainingRoute(
             Add1DSSFeature(
                 max_secondary_structure_frac_to_provide=max_ss_frac_to_provide,
@@ -509,24 +459,6 @@ def build_atom14_base_pipeline_(
                 max_ss_island_len=max_ss_island_len,
             ),
         ),
-        # SS/ADJ fold conditioning — runs on both training and inference paths.
-        # Training: reads is_helix_gt/is_sheet_gt + computes RFD1 H/E ADJ from reconstructed C-beta coords.
-        # Inference: reads ss_label_conditioning annotation + feats["adj_matrix"].
-        #
-        # NOTE: deliberately UNCONDITIONAL. An earlier revision routed motif examples
-        # (island/tipatom/ppi) around this transform so the keys would be genuinely
-        # absent from `f`, on the theory that the model's "no SS/ADJ requested" path
-        # (encoders.py skips each adapter unless its key is present) was otherwise
-        # never trained. That theory was wrong: SSAdapter and ADJAdapter both zero
-        # their masked state (`out * not_masked`, masked = ss 3 / adj 2), so an
-        # all-masked tensor adds *exactly* zero to S_I / Z_init_II -- bit-identical
-        # to skipping the adapter. The CFG-dropout unconditional mode therefore
-        # already trains that path. Skipping the transform only removed the adapters
-        # from the autograd graph, which broke training two different ways:
-        #   * adapter-only phases (freeze_by_default=true): the loss ended up with no
-        #     trainable parameter at all -> "element 0 of tensors does not require grad"
-        #   * full-model DDP phases: the adapter params received no gradient ->
-        #     "Expected to have finished reduction in the prior iteration"
         FeaturizeSSADJ(
             loop_adj=ss_adj_loop_adj,
             typed_blocks=ss_adj_typed_blocks,
@@ -539,11 +471,9 @@ def build_atom14_base_pipeline_(
         )
         if ss_adj_enabled
         else Identity(),
-        # ... AF3 token level encoding with sequence masking
         EncodeAF3TokenLevelFeatures(
             sequence_encoding=af3_sequence_encoding, encode_residues_to=GAP
         ),
-        # ... Atom-level reference features
         CreateDesignReferenceFeatures(
             generate_conformers=generate_conformers,
             generate_conformers_for_non_protein_only=generate_conformers_for_non_protein_only,
@@ -552,17 +482,13 @@ def build_atom14_base_pipeline_(
             provide_elements_for_unindexed_components=provide_elements_for_unindexed_components,
             use_element_for_atom_names_of_atomized_tokens=use_element_for_atom_names_of_atomized_tokens,
         ),
-        # ... Add useful features for losses / metrics
         AddIsXFeats(
             X=[
-                # Basic
                 "is_backbone",
                 "is_sidechain",
-                # Virtual atom
                 "is_virtual",
                 "is_central",
                 "is_ca",
-                # Conditioning
                 "is_motif_atom_with_fixed_coord",
                 "is_motif_atom_unindexed",
                 "is_motif_atom_with_fixed_seq",
@@ -589,13 +515,11 @@ def build_atom14_base_pipeline_(
         ),
     ]
 
-    # EDM-style wrap-up  (no additional features added at this point)
     transforms += get_diffusion_transforms(
         sigma_data=sigma_data,
         diffusion_batch_size=diffusion_batch_size,
     )
 
-    # ... Random augmentation accounting for motif
     transforms += [
         MotifCenterRandomAugmentation(
             batch_size=diffusion_batch_size,
@@ -608,7 +532,6 @@ def build_atom14_base_pipeline_(
         ),
     ]
 
-    # Subset to necessary keys only
     keys_to_keep = [
         "example_id",
         "feats",
@@ -627,7 +550,6 @@ def build_atom14_base_pipeline_(
                 "specification",
             ]
         )
-        # For debugging & tests:
         if not is_inference:
             keys_to_keep.append("conditions")
     transforms.append(SubsetToKeys(keys_to_keep))
@@ -639,12 +561,10 @@ def build_atom14_base_pipeline_(
 def build_atom14_base_pipeline(
     is_inference: bool,
     *,
-    # Dumped args:
     protein_msa_dirs=None,
     rna_msa_dirs=None,
     n_recycles=None,
     n_msa=None,
-    # Catch all other arguments:
     **kwargs,
 ):
     """
@@ -653,7 +573,6 @@ def build_atom14_base_pipeline(
     """
 
     if is_inference:
-        # Provide explicit defaults for training-only args
         kwargs.setdefault("crop_size", 512)
         kwargs.setdefault("crop_center_cutoff_distance", 10.0)
         kwargs.setdefault("crop_contiguous_probability", 1.0)
@@ -678,7 +597,6 @@ def build_atom14_base_pipeline(
         kwargs.setdefault("train_conditions", {})
         kwargs.setdefault("residue_cache_dir", None)
 
-        # TODO: Delete these once all checkpoints are updated with the latest defaults
         kwargs.setdefault("generate_conformers_for_non_protein_only", True)
         kwargs.setdefault("return_atom_array", True)
         kwargs.setdefault("provide_elements_for_unindexed_components", False)

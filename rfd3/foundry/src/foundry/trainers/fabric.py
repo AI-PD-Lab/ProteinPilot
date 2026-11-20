@@ -127,7 +127,6 @@ class FabricTrainer(ABC):
             (3) Fabric Loggers (https://lightning.ai/docs/fabric/2.4.0/api/loggers.html)
             (4) Efficient Gradient Accumulation (https://lightning.ai/docs/fabric/2.4.0/advanced/gradient_accumulation.html)
         """
-        # Handle XPU accelerator
         is_xpu = hasattr(torch, "xpu") and torch.xpu.is_available()
         if accelerator == "xpu" or (
             accelerator == "auto" and is_xpu and not torch.cuda.is_available()
@@ -136,7 +135,7 @@ class FabricTrainer(ABC):
             precision_plugin = None
             if precision in ("16-mixed", "bf16-mixed"):
                 precision_plugin = XPUMixedPrecision(precision=precision)
-                precision = None  # Handled by plugin
+                precision = None
             strategy = SingleXPUStrategy(precision_plugin=precision_plugin)
             ranked_logger.info("Using Intel XPU with SingleXPUStrategy")
         elif (
@@ -149,9 +148,8 @@ class FabricTrainer(ABC):
                 find_unused_parameters=find_unused_parameters,
             )
         else:
-            strategy = "auto"  # type: ignore
+            strategy = "auto"
 
-        # See (1) for initialization arguments for Fabric()
         self.fabric = L.Fabric(
             accelerator=accelerator,
             strategy=strategy,
@@ -162,24 +160,20 @@ class FabricTrainer(ABC):
             loggers=loggers,
         )
 
-        # Training
         self.clip_grad_max_norm = clip_grad_max_norm
         self.skip_nan_grad = skip_nan_grad
         self.error_if_grad_nonfinite = error_if_grad_nonfinite
         self.grad_accum_steps = grad_accum_steps
 
-        # Stopping
         self.max_epochs = max_epochs
         self.should_stop = False
         self.n_examples_per_epoch = n_examples_per_epoch
         self.limit_train_batches = limit_train_batches
         self.limit_val_batches = limit_val_batches
 
-        # Validation
         self.validate_every_n_epochs = validate_every_n_epochs
         self.prevalidate = prevalidate
 
-        # Checkpoints
         self.output_dir = Path(output_dir) if output_dir else None
         self.checkpoint_every_n_epochs = checkpoint_every_n_epochs
         self.checkpoint_every_n_steps = checkpoint_every_n_steps
@@ -200,7 +194,6 @@ class FabricTrainer(ABC):
             train_cfg: The training configuration dictionary. Used for reinitializing the trainer with the same configuration
                 (for training or for inference). Default is an empty dictionary.
         """
-        # Default values for the state
         default_state = {
             "model": None,
             "optimizer": None,
@@ -210,15 +203,12 @@ class FabricTrainer(ABC):
             "train_cfg": {},
         }
 
-        # Initialize self.state with default values if it doesn't exist
         if not hasattr(self, "state"):
             self.state = default_state.copy()
         else:
-            # Ensure existing state has all default keys
             for key, value in default_state.items():
                 self.state.setdefault(key, value)
 
-        # Merge the updates into the existing state
         self.state.update(updates)
 
     def construct_optimizer(self) -> None:
@@ -232,7 +222,6 @@ class FabricTrainer(ABC):
         ), "Model not found in state dictionary! You must call `construct_model()` before constructing the optimizer."
 
         if self.state["train_cfg"].model.optimizer:
-            # ... instantiate the optimizer
             optimizer = hydra.utils.instantiate(
                 self.state["train_cfg"].model.optimizer,
                 params=self.state["model"].parameters(),
@@ -249,7 +238,6 @@ class FabricTrainer(ABC):
             "optimizer" in self.state and self.state["optimizer"]
         ), "Optimizer not found in state dictionary! You must call `construct_optimizer()` before constructing the scheduler."
 
-        # ...  instantiate the LR scheduler(s)
         lr_scheduler = (
             hydra.utils.instantiate(
                 self.state["train_cfg"].model.lr_scheduler,
@@ -260,7 +248,6 @@ class FabricTrainer(ABC):
         )
 
         if lr_scheduler:
-            # We assume "interval = step" and "frequency = 1" for the default scheduler; custom implementations may override this method
             scheduler_cfg = SchedulerConfig(
                 scheduler=lr_scheduler,
                 interval="step",
@@ -275,7 +262,6 @@ class FabricTrainer(ABC):
         For an example, see the `construct_model` method in the `AF3Trainer`
         Construct the model and optionally wrap with EMA.
         """
-        # ... instantiate model with Hydra and Fabric
         with self.fabric.init_module():
             ranked_logger.info("Instantiating model...")
 
@@ -284,11 +270,6 @@ class FabricTrainer(ABC):
                 _recursive_=False,
             )
 
-        # Wrap with EMA *outside* `init_module()` -- that context patches module/
-        # tensor creation to place things directly on the target device, which
-        # is unnecessary overhead for `copy.deepcopy` (used internally by EMA to
-        # build the shadow model) since the source model already lives on its
-        # target device.
         if self.state["train_cfg"].model.ema is not None:
             ranked_logger.info("Wrapping model with EMA...")
             model = EMA(model, **self.state["train_cfg"].model.ema)
@@ -307,13 +288,11 @@ class FabricTrainer(ABC):
         model = self.state["model"]
         optimizer = self.state["optimizer"]
 
-        # ... setup the model and optimizer
         if optimizer:
             model, optimizer = self.fabric.setup(model, optimizer)
         else:
             model = self.fabric.setup(model)
 
-        # ... update the state dictionary (we avoid updating the state dictionary in-place, which is an anti-pattern)
         self.initialize_or_update_trainer_state(
             {
                 "model": model,
@@ -346,7 +325,6 @@ class FabricTrainer(ABC):
             hasattr(self, "state") and "model" in self.state
         ), "Model not found in state dictionary! You must call `instantiate_model()` before running fit()."
 
-        # (If we don't have enough examples to sample, we will log a warning and use the smaller number)
         if len(train_loader) * self.fabric.world_size < self.n_examples_per_epoch:
             ranked_logger.warning(
                 f"Number of examples per epoch ({self.n_examples_per_epoch}) exceeds the number of examples in the loader: "
@@ -357,9 +335,7 @@ class FabricTrainer(ABC):
             self.n_examples_per_epoch / self.fabric.world_size
         )
 
-        # ... setup training and validation dataloaders with Fabric
         train_loader = self.fabric.setup_dataloaders(
-            # Our sampler is already distributed, so we don't need to wrap with a DistributedSampler
             train_loader,
             use_distributed_sampler=False,
         )
@@ -384,7 +360,6 @@ class FabricTrainer(ABC):
             )
 
             if ckpt_path.is_dir():
-                # If given a directory, load the latest checkpoint from the directory
                 ranked_logger.info(
                     f"Loading latest checkpoint within the directory {ckpt_path}..."
                 )
@@ -394,31 +369,25 @@ class FabricTrainer(ABC):
                     reset_optimizer=reset_optimizer,
                 )
             else:
-                # If given a specific checkpoint file, load that checkpoint
                 self.load_checkpoint(
                     ckpt_path,
                     weight_loading_config=ckpt_config.weight_loading_config,
                     reset_optimizer=reset_optimizer,
                 )
 
-            # Apply parameter freezing if a freezing config is provided
             if getattr(ckpt_config, "parameter_freezing_config", None) is not None:
                 ranked_logger.info(
                     "Applying parameter freezing according to CheckpointConfig..."
                 )
                 freeze_parameters_with_config(
-                    # We must access the model through "module", since the model may be wrapped
                     self.state["model"].module,
                     ckpt_config.parameter_freezing_config,
                 )
 
-            # Reset epoch counter when starting fresh from a base checkpoint
             if getattr(ckpt_config, "reset_epoch", False):
                 self.state["current_epoch"] = 0
 
-            # Increment the global epoch (e.g., if we loaded a checkpoint from [the end of] epoch 5, we should start training at epoch 6)
             self.state["current_epoch"] += 1
-            # Stopping conditions
             if (
                 self.max_epochs is not None
                 and self.state["current_epoch"] >= self.max_epochs
@@ -427,17 +396,12 @@ class FabricTrainer(ABC):
         else:
             ranked_logger.info("No checkpoint provided; training from scratch.")
 
-        # Set the _num_iter_calls internal attribute of the wrapped loader to the current epoch
-        # (NOTE: This addresses a bug in Lightning Fabric, where there the iter() method calls the `_set_sampler_epoch()` method,
-        # relying on the _num_iter_calls attribute to determine the current epoch)
         train_loader._num_iter_calls = self.state["current_epoch"]
 
         self.fabric.call("on_fit_start", trainer=self)
 
-        # Prevalidate
         if self.prevalidate and val_loaders:
-            # Temporarily decrement the current epoch, since we haven't done any training this epoch
-            self.state["current_epoch"] -= 1  # (Will be -1 if training from scratch)
+            self.state["current_epoch"] -= 1
             ranked_logger.info(
                 f"Prevalidating with epoch {self.state['current_epoch']} before training; to avoid this behavior, set `prevalidate=False` in the Trainer config."
             )
@@ -445,10 +409,9 @@ class FabricTrainer(ABC):
                 val_loaders=val_loaders,
                 limit_batches=self.limit_val_batches,
             )
-            self.state["current_epoch"] += 1  # (Restore the current epoch)
+            self.state["current_epoch"] += 1
 
         while not self.should_stop:
-            # ... train for one epoch
             ranked_logger.info(
                 f"\n+ Starting epoch {self.state['current_epoch']}/{self.max_epochs - 1}\n"
                 f"+ Total examples per epoch (across all GPU): {self.n_examples_per_epoch}\n"
@@ -464,16 +427,13 @@ class FabricTrainer(ABC):
 
             ranked_logger.info(f"Finished epoch {self.state['current_epoch']}!")
 
-            # ... step the scheduler, if we're adjusting the learning rate at the epoch-level
             self.step_scheduler(
                 level="epoch", current_value=self.state["current_epoch"]
             )
 
-            # ... save checkpoint before validation so a validation crash doesn't lose the epoch
             if self.state["current_epoch"] % self.checkpoint_every_n_epochs == 0:
                 self.save_checkpoint()
 
-            # ... validate, if we're at the validation interval
             if self.should_validate and val_loaders:
                 ranked_logger.info(
                     f"Starting validation for epoch {self.state['current_epoch']}!"
@@ -483,17 +443,14 @@ class FabricTrainer(ABC):
                     limit_batches=self.limit_val_batches,
                 )
 
-            # ... increment the epoch
             self.state["current_epoch"] += 1
 
-            # Stopping conditions
             if (
                 self.max_epochs is not None
                 and self.state["current_epoch"] >= self.max_epochs
             ):
                 self.should_stop = True
 
-        # Reset for next `fit()` call
         self.should_stop = False
 
         self.fabric.call("on_fit_end", trainer=self)
@@ -515,12 +472,10 @@ class FabricTrainer(ABC):
 
         assert self.state["model"].training
 
-        # NOTE: When we call iter(), Fabric calls the `set_sampler_epoch()` method on the sampler behind the scenes, so we don't need to call it explicitly
         train_iter = iter(train_loader)
         self.fabric.call("on_after_train_loader_iter", trainer=self)
 
         for batch_idx in range(len(train_loader)):
-            # (End epoch if stopping training completely or maximum desired batches for this epoch reached)
             if self.should_stop or batch_idx >= limit_batches:
                 break
 
@@ -531,13 +486,12 @@ class FabricTrainer(ABC):
                 "on_train_batch_start", trainer=self, batch=batch, batch_idx=batch_idx
             )
 
-            # Optimizer should step if we've accumulated the desired number of gradients
             should_optimizer_step = (batch_idx + 1) % self.grad_accum_steps == 0
 
             self.training_step(
                 batch=batch,
                 batch_idx=batch_idx,
-                is_accumulating=not should_optimizer_step,  # triggers gradient syncing
+                is_accumulating=not should_optimizer_step,
             )
 
             self.fabric.call(
@@ -555,28 +509,20 @@ class FabricTrainer(ABC):
                     optimizer=self.state["optimizer"],
                 )
 
-                # ... step the optimizer, clipping gradients and updating EMA parameters if applicable
-                # Note: step_optimizer() calls optimizer.step(), which internally triggers
-                # on_after_optimizer_step callbacks via _FabricOptimizer
                 self.step_optimizer()
 
-                # ... call optimizer_step hook (distinct from on_after_optimizer_step which is called by Fabric)
                 self.fabric.call(
                     "optimizer_step",
                     trainer=self,
                     optimizer=self.state["optimizer"],
                 )
 
-                # ... step the scheduler, if we're adjusting the learning rate at the optimizer step-level
                 self.step_scheduler(
                     level="step", current_value=self.state["global_step"]
                 )
 
-            # ... increment the global step, if optimizer stepped
-            # NOTE: Each node maintains its own global step
             self.state["global_step"] += int(should_optimizer_step)
 
-            # ... save checkpoint if we've reached the step-based checkpoint interval
             if (
                 should_optimizer_step
                 and self.checkpoint_every_n_steps is not None
@@ -599,23 +545,19 @@ class FabricTrainer(ABC):
             limit_batches: Limit on the batches during this validation epoch. If greater than the number of batches in the
                 `val_loader`, this argument has no effect. Helpful for debugging; should NOT be used for production.
         """
-        # ... set model to evaluation mode
         self.state["model"].eval()
 
         with torch.no_grad():
-            # ... assert we're in evaluation mode
             assert not self.state["model"].training
 
             self.fabric.call("on_validation_epoch_start", trainer=self)
 
-            # ... iterate over all validation loaders
             for val_loader_name, val_loader in val_loaders.items():
                 ranked_logger.info(
                     f"Running validation on dataset: {val_loader_name}, with {len(val_loader)} batches, with world_size={self.fabric.world_size}."
                 )
 
                 for batch_idx, batch in enumerate(val_loader):
-                    # ... end validation epoch if stopping training completely or maximum desired batches for this epoch reached
                     if self.should_stop or batch_idx >= limit_batches:
                         break
 
@@ -645,7 +587,6 @@ class FabricTrainer(ABC):
 
             self.fabric.call("on_validation_epoch_end", trainer=self)
 
-            # ... reset the model to training mode
             self.state["model"].train()
 
     @abstractmethod
@@ -707,13 +648,11 @@ class FabricTrainer(ABC):
 
         self.load_checkpoint(ckpt_path)
 
-        # Setup validation dataloaders with Fabric
         for key, loader in val_loaders.items():
             val_loaders[key] = self.fabric.setup_dataloaders(
                 loader, use_distributed_sampler=False
             )
 
-        # Run the validation loop
         self.validation_loop(
             val_loaders=val_loaders, limit_batches=self.limit_val_batches
         )
@@ -740,7 +679,6 @@ class FabricTrainer(ABC):
         optimizer = self.state["optimizer"]
         model = self.state["model"]
 
-        # ... check for NaN/Inf gradients, if applicable
         if self.skip_nan_grad:
             has_nan_or_inf = False
             for param in model.parameters():
@@ -754,9 +692,8 @@ class FabricTrainer(ABC):
                     f"Skipping optimizer step at global_step={self.state['global_step']} due to NaN/Inf gradients"
                 )
                 optimizer.zero_grad()
-                return  # Skip this update
+                return
 
-        # ... clip gradients, if applicable
         if self.clip_grad_max_norm is not None:
             self.fabric.clip_gradients(
                 module=model,
@@ -765,13 +702,10 @@ class FabricTrainer(ABC):
                 error_if_nonfinite=self.error_if_grad_nonfinite,
             )
 
-        # ... step the optimizer
         optimizer.step()
 
-        # ... zero gradients
         optimizer.zero_grad()
 
-        # ... update EMA parameters, if applicable
         if hasattr(model, "update"):
             model.update()
 
@@ -786,21 +720,17 @@ class FabricTrainer(ABC):
             level: The level at which to step the scheduler. Either "epoch" or "step".
             current_value: The current epoch or step value.
         """
-        # (No scheduler)
         if "scheduler_cfg" not in self.state or self.state["scheduler_cfg"] is None:
             return
         else:
             scheduler_cfg = self.state["scheduler_cfg"]
 
-        # (Wrong interval; e.g., we adjust learning rate every epoch, but we are stepping at the step level)
         if scheduler_cfg.interval != level:
             return
 
-        # (Right interval, but wrong frequency)
         if current_value % cast(int, scheduler_cfg.frequency) != 0:
             return
 
-        # ... step the scheduler
         scheduler_cfg.scheduler.step()
 
     def save_checkpoint(self) -> None:
@@ -808,22 +738,18 @@ class FabricTrainer(ABC):
 
         If no output directory is specified, then no checkpoint is saved.
         """
-        # No checkpoint directory; skip saving
         if not self.output_dir:
             ranked_logger.warning(
                 "No output directory specified; skipping model checkpointing of state dictionary."
             )
             return
 
-        # (Provide a hook to modify the state before saving)
         self.fabric.call("on_save_checkpoint", trainer=self, state=self.state)
 
-        # ... construct the checkpoint file path using Path
         checkpoint_file = (
             self.output_dir / "ckpt" / f"epoch-{self.state['current_epoch']:04d}.ckpt"
         )
 
-        # NOTE: Fabric's `save()` will call the `state_dict()` method on the model, optimizer, and scheduler_cfg
         self.fabric.save(checkpoint_file, self.state)
         ranked_logger.info(f"Saved checkpoint to: {checkpoint_file}")
 
@@ -845,7 +771,6 @@ class FabricTrainer(ABC):
         self, ckpt: Mapping, weight_loading_config: WeightLoadingConfig | None = None
     ) -> None:
         """Loads the model state from the checkpoint, handling EMA and size mismatches."""
-        # ... load pre-trained weights from the CHECKPOINT into the MODEL (that at this point has random weights)
         model = self.state["model"]
         model.load_state_dict(
             load_weights_with_policies(
@@ -869,28 +794,19 @@ class FabricTrainer(ABC):
           weight_loading_config: Weight loading policies to apply. Defaults to ``None``.
           reset_optimizer: Whether to reset the optimizer state. Defaults to ``False``.
         """
-        # ... load the checkpoint or use the provided dict
         if isinstance(checkpoint, dict):
             ranked_logger.info("Using pre-loaded checkpoint...")
             ckpt = checkpoint
         else:
             ranked_logger.info(f"Loading checkpoint from: {checkpoint}...")
-            # mmap avoids fully materializing the checkpoint in each rank's host RAM
-            # (measured ~2.6GB/rank without it vs ~18MB with it on a 2.7GB checkpoint) --
-            # matters most for multi-rank DDP startup, where every rank loads the same
-            # file independently and simultaneously.
             ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False, mmap=True)
 
         try:
-            # ... optimize, scheduler
             if not reset_optimizer:
                 self._load_optimizer(ckpt)
                 self._load_scheduler(ckpt)
-            # ... model
             self._load_model(ckpt, weight_loading_config)
 
-            # ... stateless keys
-            # (We do not want to load the `train_cfg` in this instance, as it may contain different configurations)
             keys_to_ignore = {"model", "optimizer", "scheduler_cfg", "train_cfg"}
             self.state.update(
                 {
@@ -900,7 +816,6 @@ class FabricTrainer(ABC):
                 }
             )
 
-            # Log warnings for missing and extra keys
             state_keys = set(self.state) - keys_to_ignore
             ckpt_keys = set(ckpt) - keys_to_ignore
 
@@ -939,10 +854,8 @@ class FabricTrainer(ABC):
         if not ckpt_load_dir.is_dir():
             return None
 
-        # List all files in the directory and sort them
         items = sorted(ckpt_load_dir.iterdir())
 
-        # Return the last item in the sorted list, if any
         return items[-1] if items else None
 
     @property

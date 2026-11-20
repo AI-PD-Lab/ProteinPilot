@@ -122,36 +122,28 @@ def fetch_motif_residue_(
         input, components
     )
 
-    # ... Fetch residue in the input atom array
     mask = fetch_mask_from_idx(f"{src_chain}{src_resid}", atom_array=src_atom_array)
     subarray = src_atom_array[mask]
     res_name = subarray.res_name[0]
 
-    # Check if we have a redesign_motif_sidechains contig
     if isinstance(redesign_motif_sidechains, list):
-        # If we have a list, check if the residue is in the list
         if f"{src_chain}{src_resid}" in redesign_motif_sidechains:
             redesign_motif_sidechains = True
         else:
             redesign_motif_sidechains = False
 
-    # Assign base properties
     subarray = set_default_conditioning_annotations(
         subarray, motif=True, unindexed=False, dtype=int
-    )  # all values init to True (fix all)
+    )
 
     to_unindex = f"{src_chain}{src_resid}" in unindexed_components
     to_index = f"{src_chain}{src_resid}" in components
 
-    # Assign is motif atom and sequence
     if exists(atoms := fixed_atoms.get(f"{src_chain}{src_resid}")):
-        # If specified, we set fixed atoms in the residue to be motif atoms
         atom_mask = get_name_mask(subarray.atom_name, atoms, res_name)
         subarray.set_annotation("is_motif_atom", atom_mask)
-        # subarray.set_annotation("is_motif_atom_with_fixed_coord", atom_mask)  # BUGFIX: uncomment
 
     elif redesign_motif_sidechains and res_name in STANDARD_AA:
-        # If redesign_motif_sidechains is True, we only make the backbone atoms to be motif atoms
         n_atoms = subarray.shape[0]
         diffuse_oxygen = False
         if n_atoms < 3:
@@ -159,19 +151,13 @@ def fetch_motif_residue_(
                 f"Not enough data for {src_chain}{src_resid} in input atom array."
             )
         if n_atoms == 3:
-            # Handle cases with N, CA, C only;
             subarray = subarray + create_o_atoms(subarray.copy())
-            diffuse_oxygen = True  # flag oxygen for generation
+            diffuse_oxygen = True
 
-        # Subset to the first 4 atoms (N, CA, C, O) only
         subarray = subarray[np.isin(subarray.atom_name, ["N", "CA", "C", "O"])]
 
-        # exactly N, CA, C, O but no CB. Place CB onto idealized position and conver to ALA
-        # Sequence name ALA ensures the padded atoms to be diffused from the fixed backbone
-        # are placed on the CB so as to not leak the identity of the residue.
         subarray = subarray + create_cb_atoms(subarray.copy())
 
-        # Sequence name must be set to ALA such that the central atom is correctly CB
         subarray.res_name = np.full_like(
             subarray.res_name, "ALA", dtype=subarray.res_name.dtype
         )
@@ -185,8 +171,6 @@ def fetch_motif_residue_(
             "is_motif_atom_with_fixed_seq", np.zeros(subarray.shape[0], dtype=int)
         )
     elif to_index or to_unindex:
-        # If the residue is in the contig or unindexed components,
-        # we set all atoms in the residue to be motif atoms
         subarray.set_annotation("is_motif_atom", np.ones(subarray.shape[0], dtype=int))
     else:
         if to_unindex and not (
@@ -219,10 +203,8 @@ def fetch_motif_residue_(
         subarray.set_annotation(
             "is_motif_atom_unindexed", subarray.is_motif_atom.copy()
         )
-        # Subset to desired motif atoms
         subarray = subarray[subarray.is_motif_atom.astype(bool)]
 
-    # ... Relax sequence constraint if provided
     if (
         exists(unfixed_sequence_components)
         and f"{src_chain}{src_resid}" in unfixed_sequence_components
@@ -235,10 +217,9 @@ def fetch_motif_residue_(
             np.zeros(subarray.shape[0], dtype=int),
         )
 
-    # ... Double check that required annotations are set within the scope of this function only
     check_has_required_conditioning_annotations(subarray)
     subarray = set_common_annotations(subarray)
-    subarray.set_annotation("res_id", np.full(subarray.shape[0], 1))  # Reset to 1
+    subarray.set_annotation("res_id", np.full(subarray.shape[0], 1))
     return subarray
 
 
@@ -486,7 +467,6 @@ def accumulate_components(
     Returns:
         - Accumulated atom array with components, and is_motif labels
     """
-    # ... Create component assignment functions
     fetch_motif_residue = functools.partial(
         fetch_motif_residue_,
         components=components,
@@ -501,10 +481,9 @@ def accumulate_components(
     )
     create_diffused_residues = create_diffused_residues_
 
-    # ... For loop accum variables
     breaks = [None] * len(components) if breaks is None else breaks
     unindexed_components_started = (
-        False  # once one unindexed component is added, stop adding diffused residues
+        False
     )
     atom_array_accum = []
     chain = start_chain
@@ -512,17 +491,14 @@ def accumulate_components(
     molecule_id = 0
     source_to_accum_idx: Dict[int, int] = {}
     current_accum_idx = 0
-    # 2) Insert contig information one- by one-
     for component, is_break in zip(components, breaks):
         if component == "/0":
-            # reset iterators on next chain
             chain = chr(ord(chain) + 1)
             molecule_id += 1
             res_id = 1
             continue
 
-        # Create array to insert
-        if str(component)[0].isalpha():  # motif (e.g. "A22")
+        if str(component)[0].isalpha():
             atom_array_insert = fetch_motif_residue(*split_contig(component))
             n = 1
             src_indices = None
@@ -541,7 +517,6 @@ def accumulate_components(
                     np.ones(atom_array_insert.shape[0], dtype=int),
                 )
         else:
-            ## foundry components update sends P for protein tokens
             n = int(component[:-1])
             if n == 0 or unindexed_components_started:
                 res_id += n
@@ -557,7 +532,6 @@ def accumulate_components(
                     ),
                 )
 
-        # ... Set index of insertion
         atom_array_insert = set_indices(
             array=atom_array_insert,
             chain=chain,
@@ -579,7 +553,6 @@ def accumulate_components(
             for i, src_idx in enumerate(src_indices):
                 source_to_accum_idx[int(src_idx)] = current_accum_idx + i
 
-        # ... Insert & Increment residue ID
         atom_array_accum.append(atom_array_insert)
         res_id += n
         current_accum_idx += len(atom_array_insert)
@@ -604,7 +577,6 @@ def accumulate_components(
             atom_array_accum, src_atom_array, source_to_accum_idx
         )
 
-    # Reset res_id for unindexed residues to avoid duplicates (ridiculously long lines of code, cleanup later)
     if np.any(atom_array_accum.is_motif_atom_unindexed.astype(bool)) and not np.all(
         atom_array_accum.is_motif_atom_unindexed.astype(bool)
     ):
@@ -628,14 +600,8 @@ def accumulate_components(
     return atom_array_accum
 
 
-#################################################################################
-# Custom conditioning functions
-#################################################################################
-
-
 def create_atom_array_from_design_specification_legacy(
     *,
-    # Specification args:
     input: PathLike = None,
     length: str = "100-300",
     contig: str = None,
@@ -646,29 +612,23 @@ def create_atom_array_from_design_specification_legacy(
     unfix_all=False,
     unfix_specific: str = None,
     flexible_backbone: bool = False,
-    # Args for biomolecular design (Enzymes, DNA/PNA):
     ligand: str = None,
     ori_token: list[float] = None,
     infer_ori_strategy: str | None = None,
     atomwise_rasa: dict = None,
     atomwise_hbond: dict = None,
-    # Additional args:
     out_path=None,
     cif_parser_args=None,
-    # PPI Kwargs
     atom_level_hotspots: dict | None = None,
-    # SS conditioning kwargs
     is_helix: dict | None = None,
     is_sheet: dict | None = None,
     is_loop: dict | None = None,
     spoof_helical_bundle_ss_conditioning: bool = False,
     symmetry: dict = None,
-    # Low-temperature global conditioning args
     plddt_enhanced: bool = True,
     is_non_loopy: bool | None = None,
-    # Partial diff args:
-    partial_t: float | None = None,  # Optional noise scale for partial diffusion
-    **_,  # dump additional args
+    partial_t: float | None = None,
+    **_,
 ):
     """
     Create pre-pipeline CIF file.
@@ -691,14 +651,11 @@ def create_atom_array_from_design_specification_legacy(
     Returns:
         - atom_array with all required conditioning annotations set appropriately.
     """
-    ###########################################################################################################################
 
-    # 1) Load input data if provided
     if exists(input):
         atom_array_input = inference_load_(input, cif_parser_args=cif_parser_args)[
             "atom_array"
         ]
-        # If we are doing symmetric design, we need to center the full input atom array at the origin (for getting symmetry frames)
         if exists(symmetry) and symmetry.get("id"):
             atom_array_input = center_symmetric_src_atom_array(atom_array_input)
     elif exists(contig) or exists(length):
@@ -708,10 +665,8 @@ def create_atom_array_from_design_specification_legacy(
     if isinstance(length, int):
         length = f"{length}-{length}"
     if exists(length) and not exists(contig):
-        # Handle cases where contigs aren't specified
         if not exists(unindex) and not exists(flexible_backbone):
             if exists(fixed_atoms):
-                # ensure that fixed atoms are in the input, else raise error
                 _ = [
                     fetch_mask_from_component(key, atom_array=atom_array_input)
                     for key in fixed_atoms.keys()
@@ -740,31 +695,25 @@ def create_atom_array_from_design_specification_legacy(
         )
         optional_conditions.append("is_atom_level_hotspot")
 
-    # 2) Parse contigs into components
     indexed_components = get_design_pattern_with_constraints(
         contig, length
-    )  # e.g. [2, A20, A21, 2, A25, 3, A30, /0, 3]
+    )
 
-    # Parse redesign_motif_sidechains if necessary
     if isinstance(redesign_motif_sidechains, str):
         redesign_motif_sidechains = get_design_pattern_with_constraints(
             redesign_motif_sidechains
         )
-    ###########################################################################################################################
 
-    # ... Add unindexed components
     unindexed_components, unindexed_breaks = (
         get_motif_components_and_breaks(unindex) if exists(unindex) else ([], [])
     )
     breaks = [None] * len(indexed_components) + unindexed_breaks
     assert_non_intersecting_contigs(indexed_components, unindexed_components)
 
-    # ... Expand unfix_sequence into components
     unfixed_sequence_components = (
         get_design_pattern_with_constraints(unfix_sequence) if unfix_sequence else []
     )
 
-    # Determine which residues to unfix
     unfix_residues = []
     if isinstance(unfix_specific, list):
         unfix_residues = [str(u) for u in unfix_specific]
@@ -776,13 +725,11 @@ def create_atom_array_from_design_specification_legacy(
                 unfix_specific, index_all=True
             )
 
-    # 3) Create atom array from components
     if exists(partial_t):
         ranked_logger.info("Using partial diffusion with t=%s", partial_t)
         atom_array = assign_types_(copy.deepcopy(atom_array_input))
         atom_array = atom_array[atom_array.is_protein]
 
-        # Set the whole thing without constraints
         atom_array = set_default_conditioning_annotations(
             atom_array, motif=False, unindexed=False
         )
@@ -790,44 +737,35 @@ def create_atom_array_from_design_specification_legacy(
             atom_array, set_src_component_to_res_name=False
         )
 
-        # Fix parts in the atom array as fixed components
         set_default_conditioning_annotations(atom_array, motif=False, unindexed=False)
         if indexed_components and indexed_components_provided:
             for component in indexed_components:
                 if str(component)[0].isalpha():
                     mask = fetch_mask_from_component(component, atom_array=atom_array)
 
-                    # Set the component as a motif token
                     set_default_conditioning_annotations(
                         atom_array, motif=True, unindexed=False, mask=mask
                     )
 
-                    # Set the fixed atoms of the component
                     if mask.any():
-                        # Also handle fixed atoms
                         if component in fixed_atoms:
                             atom_mask = get_name_mask(
                                 atom_array.atom_name[mask],
                                 fixed_atoms[component],
                                 atom_array.res_name[mask][0],
                             )
-                            # If specific fixed atoms are selected, set fixed coordinates to those specified
                             atom_array.is_motif_atom_with_fixed_coord[mask] = atom_mask
                         else:
-                            # Otherwise fix the entire token.
                             atom_array.is_motif_atom_with_fixed_coord[mask] = 1
 
-        # Append unindexed components from input specifcation
         if unindexed_components:
             start_resid = np.max(atom_array.res_id) + 1
             start_chain = atom_array.chain_id[
                 0
-            ]  # HACK: set chain ID for unindexed residues as whatever the input has
+            ]
             atom_array_append = accumulate_components(
-                # Normal stuff:
                 components=unindexed_components,
                 breaks=unindexed_breaks,
-                # Regular other stuff
                 src_atom_array=atom_array_input,
                 redesign_motif_sidechains=redesign_motif_sidechains,
                 unindexed_components=unindexed_components,
@@ -856,14 +794,12 @@ def create_atom_array_from_design_specification_legacy(
             unfix_residues=unfix_residues,
         )
 
-    # Spoof assignments for is_motif_token
     f = get_motif_features(atom_array)
     is_motif_token = f["is_motif_token"]
     atom_array.set_annotation("is_motif_token", is_motif_token.astype(int))
     is_motif_atom = f["is_motif_atom"]
     atom_array.set_annotation("is_motif_atom", is_motif_atom.astype(int))
 
-    # ... If ligand, post-pend it
     if exists(ligand):
         ligand_array = extract_ligand_array(
             atom_array_input,
@@ -883,15 +819,12 @@ def create_atom_array_from_design_specification_legacy(
         )
         atom_array = atom_array + ligand_array
 
-    # ... Apply symmetry if it exists ahead of any other processing
     if exists(symmetry) and symmetry.get("id"):
         atom_array = make_symmetric_atom_array(
             atom_array, symmetry, sm=ligand, src_atom_array=atom_array_input
         )
 
-    # ... Input frame and ORI token handling
     if exists(partial_t):
-        # For symmetric structures, avoid COM centering that would collapse chains
         if exists(symmetry) and symmetry.get("id"):
             ranked_logger.info(
                 "Partial diffusion with symmetry: skipping COM centering to preserve chain spacing"
@@ -905,12 +838,10 @@ def create_atom_array_from_design_specification_legacy(
         atom_array = set_com(
             atom_array, ori_token=ori_token, infer_ori_strategy=infer_ori_strategy
         )
-        # diffused atoms initialized at origin
         atom_array.coord[~atom_array.is_motif_atom_with_fixed_coord.astype(bool), :] = (
             0.0
         )
 
-    # This is an annotation on the diffused regions, so must be added after accumulate_components
     if spoof_helical_bundle_ss_conditioning:
         is_helix = spoof_helical_bundle_ss_conditioning_fn(atom_array)
         is_sheet = None
@@ -937,7 +868,6 @@ def create_atom_array_from_design_specification_legacy(
             "ref_plddt", np.ones((atom_array.array_length(),), dtype=int)
         )
 
-    # Ensure correct annotations before saving
     check_has_required_conditioning_annotations(
         atom_array, required=REQUIRED_INFERENCE_ANNOTATIONS
     )

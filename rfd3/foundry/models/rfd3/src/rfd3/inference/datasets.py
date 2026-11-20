@@ -1,6 +1,3 @@
-# '''
-# Tailored dataset wrappers for design tasks
-# '''
 
 import json
 import os
@@ -64,7 +61,6 @@ class ContigJsonDataset(MolecularDataset):
             self.json_path = None
             original_data = data
 
-        # These will have already been added at inference time, but this block is useful for validation.
         if "global_args" in original_data:
             global_args = original_data.pop("global_args")
             for k, v in original_data.items():
@@ -79,7 +75,6 @@ class ContigJsonDataset(MolecularDataset):
             self._data = {k: v for k, v in self._data.items() if k in subset_to_keys}
         self._check_json_keys()
 
-        # ...basic assignments
         self.name = name if name is not None else "json-dataset"
         self.transform = transform
 
@@ -100,7 +95,7 @@ class ContigJsonDataset(MolecularDataset):
         l = 46
         fmt_names = textwrap.fill(
             ", ".join(self.names), width=l
-        )  # .replace('\n', '+\n+ ')
+        )
         logger.info(
             f"\n+{l * '-'}+\n"
             f"Dataset {self.name}:\n"
@@ -158,16 +153,13 @@ class ContigJsonDataset(MolecularDataset):
         example_id = self.idx_to_id(idx)
         spec = self.data[example_id]
 
-        # if 'input' in metadata and not abspath, prepend the source json directory to the file path
         if not isinstance(spec, DesignInputSpecification):
             spec = ensure_input_is_abspath(spec, self.json_path)
             spec["cif_parser_args"] = self.cif_parser_args
             spec = DesignInputSpecification.safe_init(**spec)
 
-        # Create pipeline input
         data = spec.to_pipeline_input(example_id=example_id)
 
-        # Apply transforms and return
         data = self.transform(data)
         return data
 

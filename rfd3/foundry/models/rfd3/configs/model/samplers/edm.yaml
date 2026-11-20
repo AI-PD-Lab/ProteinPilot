@@ -1,5 +1,5 @@
 
-kind: "default" # "default", "symmetry", or "partial" to choose the sampler
+kind: "default"
 solver: "af3"
 num_timesteps: 100
 min_t: 0
@@ -15,7 +15,7 @@ step_scale: 1.5
 allow_realignment: False
 use_classifier_free_guidance: False
 cfg_scale: 1.5
-cfg_features: # CFG_features will be set to 0 in the unconditional CFG step
+cfg_features:
   - ref_atomwise_rasa
   - active_donor
   - active_acceptor

@@ -83,7 +83,7 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
         self.filter_weights = filter_weights
         self.filter_activations = filter_activations
 
-        self._hooks = []  # Store activation hooks for cleanup
+        self._hooks = []
         self._temp_cache = {"scalars": {}, "histograms": {}}
         self._cache = defaultdict(list)
         if not self.keep_cache:
@@ -92,8 +92,6 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
     @rank_zero_only
     def on_fit_start(self, trainer):
         """Initialize the callback and register activation hooks."""
-        # Check that we either have loggers attached or keep_cache is True, otherwise the
-        #  data will be computed but not logged.
         if not self.keep_cache and not trainer.fabric.loggers:
             raise ValueError(
                 "TrainingHealthTracker requires loggers or keep_cache=True. "
@@ -117,7 +115,6 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
         if step % self.log_freq == 0:
             model = trainer.state["model"]
 
-            # Collect weight & gradient stats
             _should_log_some_grads = self.log_grads or ("grads" in self.log_histograms)
             _should_log_some_weights = self.log_weights or (
                 "weights" in self.log_histograms
@@ -125,7 +122,6 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
             if _should_log_some_grads or _should_log_some_weights:
                 self._collect_parameter_stats(model, step)
 
-            # Log all collected stats at once using trainer's fabric instance
             if len(self._temp_cache["scalars"]) > 0 and trainer.fabric.loggers:
                 trainer.fabric.log_dict(
                     self._temp_cache["scalars"],
@@ -151,7 +147,6 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
         self._remove_activation_hooks()
 
     def on_validation_epoch_start(self, trainer):
-        # Temporarily remove any hooks for validation
         self._remove_activation_hooks()
 
     @rank_zero_only
@@ -160,10 +155,9 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
 
     def _collect_parameter_stats(self, model, step: int):
         """Collect gradient and weight statistics in a single parameter iteration."""
-        cache = self._temp_cache  # alias
+        cache = self._temp_cache
 
         for name, param in model.named_parameters():
-            # Gradient stats
             if (
                 (self.log_grads or "grads" in self.log_histograms)
                 and param.grad is not None
@@ -177,7 +171,6 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
                     cache["histograms"]["grads/" + name + "/hist"] = counts
                     cache["histograms"]["grads/" + name + "/hist_bin_edges"] = bin_edges
 
-            # Weight stats
             if (
                 self.log_weights or "weights" in self.log_histograms
             ) and self._should_track_weight(name):
@@ -212,7 +205,7 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
 
     def _register_activation_hooks(self, model, step: int):
         """Register forward hooks to accumulate activations."""
-        cache = self._temp_cache  # alias
+        cache = self._temp_cache
 
         def create_activation_hook(name):
             def hook(module, input, output):
@@ -229,7 +222,6 @@ class ActivationsGradientsWeightsTracker(BaseCallback):
 
             return hook
 
-        # Register hooks for filtered modules
         for name, module in model.named_modules():
             if self._should_track_activation(name, type(module)):
                 hook = module.register_forward_hook(create_activation_hook(name))
@@ -276,35 +268,32 @@ def plot_tensor_hist(
     """
     font_size = 8
     with plt.rc_context({"font.size": font_size}):
-        n_steps, n_bins = hist_values.shape  # (N, M)
+        n_steps, n_bins = hist_values.shape
         if log_scale:
             hist_values = np.log1p(hist_values)
         if steps is None:
             steps = np.arange(n_steps)
         fig, ax = plt.subplots(
             figsize=(6, 2), constrained_layout=True
-        )  # Added constrained_layout
+        )
         mat = ax.matshow(hist_values.T, aspect="auto")
         ax.set_xlabel("step")
 
-        # Get the automatically determined tick positions from matplotlib
         locs = ax.get_xticks()
         valid_locs = locs[(locs >= 0) & (locs < n_steps)].astype(int)
         ax.set_xticks(valid_locs)
         ax.set_xticklabels(steps[valid_locs])
         ax.set_ylabel("bins")
 
-        # Create twin axis
         if norms is not None:
             ax2 = ax.twinx()
             ax2.plot(np.arange(len(norms)), norms, color="black")
             ax2.set_ylabel("norm")
             ax2.set_xlim(0, n_steps - 1)
-            ax2.set_ylim(min(norms), max(norms))  # Independent scaling
+            ax2.set_ylim(min(norms), max(norms))
             ax2.set_xticks(valid_locs)
             ax2.set_xticklabels(steps[valid_locs])
 
-        # Add colorbar - constrained_layout will handle spacing automatically
         cbar = plt.colorbar(mat, ax=ax)
         cbar.ax.set_ylabel("log(1+count)" if log_scale else "count")
 
@@ -342,7 +331,6 @@ def plot_tensor_stats(
     Returns:
         matplotlib Figure object
     """
-    # Determine what to plot
     has_stats = any([mean is not None, min_val is not None, max_val is not None])
     has_norm = norm is not None
 
@@ -351,7 +339,6 @@ def plot_tensor_stats(
             "At least one of mean, min_val, max_val, or norm must be provided"
         )
 
-    # Create subplot layout based on available data
     if has_stats and has_norm:
         fig, (ax1, ax2) = plt.subplots(
             2,
@@ -367,12 +354,11 @@ def plot_tensor_stats(
         fig, ax1 = plt.subplots(figsize=(5, 3))
         stats_ax = ax1
         norm_ax = None
-    else:  # only norm
+    else:
         fig, ax2 = plt.subplots(figsize=(5, 3))
         norm_ax = ax2
         stats_ax = None
 
-    # Top panel: statistics (if available)
     if has_stats and stats_ax is not None:
         if mean is not None:
             stats_ax.plot(steps, mean, label="mean", color="C0")
@@ -398,11 +384,9 @@ def plot_tensor_stats(
         stats_ax.grid(True, alpha=0.3)
         stats_ax.legend(loc="upper right", bbox_to_anchor=(1, 1), ncol=2)
 
-        # Set xlabel only if this is the only panel
         if not has_norm:
             stats_ax.set_xlabel("Step")
 
-    # Bottom panel: norm (if available)
     if has_norm and norm_ax is not None:
         norm_ax.plot(steps, norm, label="norm", color="C1")
         norm_ax.set_ylabel("Norm", labelpad=0)
@@ -411,7 +395,6 @@ def plot_tensor_stats(
         norm_ax.legend(loc="upper right", bbox_to_anchor=(1, 1))
         norm_ax.ticklabel_format(style="plain", useOffset=False)
 
-        # Set title if this is the only panel and no stats panel exists
         if not has_stats and name:
             norm_ax.set_title(name, pad=5, fontsize=9)
 

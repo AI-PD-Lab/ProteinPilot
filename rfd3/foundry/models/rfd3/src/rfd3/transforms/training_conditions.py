@@ -23,11 +23,6 @@ nx.from_numpy_matrix = nx.from_numpy_array
 logger = logging.getLogger(__name__)
 
 
-#################################################################################
-# Transform for creating training conditions
-#################################################################################
-
-
 class TrainingCondition(ABC):
     """
     Base class for applying conditioning during training
@@ -74,16 +69,13 @@ class IslandCondition(TrainingCondition):
         self.name = name
         self.frequency = frequency
 
-        # Token selection
         self.island_sampling_kwargs = island_sampling_kwargs
 
-        # Atom selection
         self.p_diffuse_motif_sidechains = p_diffuse_motif_sidechains
         self.p_include_oxygen_in_backbone_mask = 0.95
         self.p_diffuse_subgraph_atoms = p_diffuse_subgraph_atoms
         self.subgraph_sampling_kwargs = subgraph_sampling_kwargs
 
-        # Additional conditioning selection
         self.p_fix_motif_coordinates = p_fix_motif_coordinates
         self.p_fix_motif_sequence = p_fix_motif_sequence
         self.p_unindex_motif_tokens = p_unindex_motif_tokens
@@ -100,7 +92,6 @@ class IslandCondition(TrainingCondition):
         """
         token_level_array = atom_array[get_token_starts(atom_array)]
 
-        # initialize motif tokens as all non-protein tokens
         is_motif_token = np.asarray(~token_level_array.is_protein, dtype=bool).copy()
         n_protein_tokens = np.sum(token_level_array.is_protein)
         islands_mask = sample_island_tokens(
@@ -109,9 +100,6 @@ class IslandCondition(TrainingCondition):
         )
         is_motif_token[token_level_array.is_protein] = islands_mask
 
-        # TODO: Atoms with covalent bonds should be motif, needs FlagAndReassignCovalentModifications transform prior to this
-        # atom_with_coval_bond = token_level_array.covale  # (n_atoms, )
-        # is_motif_token[atom_with_coval_bond] = True
 
         return spread_token_wise(atom_array, is_motif_token)
 
@@ -139,7 +127,6 @@ class IslandCondition(TrainingCondition):
                 **self.subgraph_sampling_kwargs,
             )
 
-        # We also only want resolved atoms to be motif
         is_motif_atom = (is_motif_atom) & (atom_array.occupancy > 0.0)
 
         return is_motif_atom
@@ -152,7 +139,6 @@ class IslandCondition(TrainingCondition):
         )
         atom_array.set_annotation("is_motif_atom", self.sample_motif_atoms(atom_array))
 
-        # After selecting the motif, we need to decide what conditioning strategy to apply
         atom_array = sample_conditioning_strategy(
             atom_array,
             p_fix_motif_sequence=self.p_fix_motif_sequence,
@@ -195,20 +181,17 @@ class PPICondition(TrainingCondition):
         self.allow_na_target = allow_na_target
 
     def is_valid_for_example(self, data):
-        # Extract relevant data
         atom_array = data["atom_array"]
         self.query_pn_unit_iids = data.get("query_pn_unit_iids")
 
-        # Compute protein pn_unit_iids
         protein_pn_unit_iids = []
         for pn_unit_iid in np.unique(atom_array.pn_unit_iid):
             pn_unit_atom_array = atom_array[atom_array.pn_unit_iid == pn_unit_iid]
             pn_unit_is_protein = np.unique(pn_unit_atom_array.is_protein)
 
-            if all(pn_unit_is_protein):  # Exclude cases of chimeric ligands
+            if all(pn_unit_is_protein):
                 protein_pn_unit_iids.append(pn_unit_iid)
 
-        # This mask is intended to operate on binary protein-protein interfaces
         if (
             self.query_pn_unit_iids is None
             or len(self.query_pn_unit_iids) != 2
@@ -219,21 +202,12 @@ class PPICondition(TrainingCondition):
         elif not all(
             [pn_unit in protein_pn_unit_iids for pn_unit in self.query_pn_unit_iids]
         ) and not (
-            # Mixed interface: admissible only when NA targets are enabled AND at
-            # least one side is protein to serve as the binder. A pair with no
-            # protein at all (NA<->NA, NA<->ligand) has nothing to design and is
-            # still rejected.
             self.allow_na_target
             and any(pn in protein_pn_unit_iids for pn in self.query_pn_unit_iids)
         ):
             return False
 
         else:
-            # Randomly select one of the two query pn_unit_iids to be the binder
-            # NOTE: Could also do this based on if only one will work uncropped, but since that
-            # strategy will not always be applied, enforcing it here would bias the training data.
-            # Restrict the draw to PROTEIN units: on a mixed protein/NA interface the
-            # nucleic acid may only be the fixed target, never the designed binder.
             binder_candidates = [
                 pn for pn in self.query_pn_unit_iids if pn in protein_pn_unit_iids
             ]
@@ -244,57 +218,42 @@ class PPICondition(TrainingCondition):
             )
             return True
 
-    # TODO: If I want to have multiple possible strategies for motif assignment (e.g. motif scaffolding for the binder)
-    # should probably just have this function sample between them with a set of probabilities specified in the config.
-    # Anything that makes it this far will have to be a valid PPI example with an assigned binder chain.
     def sample(self, data):
         atom_array = data["atom_array"]
 
-        # Set `is_motif_token`
-        # NOTE: In the future, we may want to diffuse part of the target or fix part of the binder
         is_motif_token = atom_array.pn_unit_iid != data["binder_pn_unit"]
         atom_array.set_annotation("is_motif_token", is_motif_token)
 
-        # Set `is_motif_atom_with_fixed_seq`
         is_motif_atom_with_fixed_seq = (
             is_motif_token.copy()
-        )  # We fix the target sequence in binder design
+        )
         atom_array.set_annotation(
             "is_motif_atom_with_fixed_seq", is_motif_atom_with_fixed_seq
         )
 
-        # Set `is_motif_atom`
         is_motif_atom = (
             is_motif_token.copy()
-        )  # The PPI mask should apply to all or no atoms of a token
+        )
         atom_array.set_annotation("is_motif_atom", is_motif_atom)
 
-        # Set `is_motif_atom_with_fixed_pos`
         is_motif_atom_with_fixed_coord = (
             is_motif_token.copy()
-        )  # We fully fix the target atom positions (at least for now)
+        )
         atom_array.set_annotation(
             "is_motif_atom_with_fixed_coord", is_motif_atom_with_fixed_coord
         )
 
-        # Set `is_motif_atom_without_index`
         is_motif_atom_unindexed = np.zeros_like(
             is_motif_token
-        )  # We want fixed indices for the target
+        )
         atom_array.set_annotation("is_motif_atom_unindexed", is_motif_atom_unindexed)
 
-        # Set `is_motif_atom_unindexed_motif_breakpoint`
         is_motif_atom_unindexed_motif_breakpoint = np.zeros_like(is_motif_token)
         atom_array.set_annotation(
             "is_motif_atom_unindexed_motif_breakpoint",
             is_motif_atom_unindexed_motif_breakpoint,
         )
         return atom_array
-
-
-##############################################################################################
-# Additional conditioning classes
-##############################################################################################
 
 
 class SubtypeCondition(TrainingCondition):
@@ -346,23 +305,18 @@ class SubtypeCondition(TrainingCondition):
         return atom_array
 
 
-################# need mask -> condition refactor
 def prune_unresolved_motif(atom_array, mask):
     """
     Prune the mask to only include resolved atoms.
     and for any residue that have unresolved atoms, set the whole residue to be False.
     """
-    # Get the indices of the atoms that are resolved
     resolved_indices = np.where(atom_array.occupancy > 0.0)[0]
 
-    # Create a mask for the resolved atoms
     resolved_mask = np.zeros_like(mask, dtype=bool)
     resolved_mask[resolved_indices] = True
 
-    # Combine the original mask with the resolved mask
     combined_mask = mask & resolved_mask
 
-    # Set the whole residue to be False if any atom in the residue is unresolved
     token_ids = np.unique(atom_array.token_id)
     for token_id in token_ids:
         if np.any(~combined_mask[atom_array.token_id == token_id]):
@@ -381,14 +335,8 @@ def generate_subtype_mask(atom_array, subtypes):
             raise ValueError(f"Subtype {subtype} not found in atom array annotations.")
         mask = atom_array.get_annotation(subtype)
         all_masks.append(mask)
-    # Combine all masks using logical OR
     combined_mask = np.logical_or.reduce(all_masks)
     return combined_mask
-
-
-##############################################################################################
-# Shared assignment functions
-##############################################################################################
 
 
 def sample_motif_subgraphs(
@@ -420,7 +368,6 @@ def sample_motif_subgraphs(
         if not is_motif_token[start]:
             continue
 
-        # Get the atoms of the current residue
         subset_mask = np.isin(idxs, idxs[start:end])
         atom_array_subset = atom_array[subset_mask]
         assert atom_array_subset.array_length() > 0
@@ -448,7 +395,6 @@ def sample_motif_subgraphs(
 
         is_motif_atom[subset_mask] = mask
 
-    # We also only want resolved atoms to be motif
     is_motif_atom = (is_motif_atom) & (atom_array.occupancy > 0.0)
 
     return is_motif_atom
@@ -496,7 +442,6 @@ def sample_is_motif_atom_with_fixed_seq(atom_array, p_fix_motif_sequence):
     else:
         is_motif_atom_with_fixed_seq = np.zeros(atom_array.array_length(), dtype=bool)
 
-    # By default reveal sequence for non-protein
     is_motif_atom_with_fixed_seq = is_motif_atom_with_fixed_seq | ~atom_array.is_protein
     return is_motif_atom_with_fixed_seq
 
@@ -527,7 +472,6 @@ def sample_unindexed_atoms(atom_array, p_unindex_motif_tokens):
     else:
         is_motif_atom_unindexed = np.zeros(atom_array.array_length(), dtype=bool)
 
-    # ensure non-residue atoms are not already flagged
     is_motif_atom_unindexed = np.logical_and(
         is_motif_atom_unindexed, atom_array.is_residue
     )
@@ -553,17 +497,14 @@ def sample_unindexed_breaks(
     if is_unindexed_token.sum() == 1:
         breaks_all = is_unindexed_token
     elif np.any(is_unindexed_token):
-        # ... Subset to unindexed tokens
         unindexed_token_starts = starts[is_unindexed_token]
         unindexed_token_resid = atom_array[unindexed_token_starts].res_id
-        breaks = np.diff(unindexed_token_resid) != 1  # (M-1,)
+        breaks = np.diff(unindexed_token_resid) != 1
 
-        # ... Connect discontiguous regions
         if remove_random_break and np.any(breaks):
             break_idx = np.random.choice(np.flatnonzero(breaks), size=1, replace=False)
             breaks[break_idx] = False
 
-        # ... Disconnect contiguous regions
         if insert_random_break:
             break_idx = np.random.choice(np.arange(len(breaks)), size=1, replace=False)
             breaks[break_idx] = True
@@ -571,7 +512,6 @@ def sample_unindexed_breaks(
         breaks[0] = True
         breaks = np.concatenate([np.array([False], dtype=bool), breaks])
 
-        # ... Remove all breaks to leak global indices:
         if leak_global_index:
             breaks = False
 

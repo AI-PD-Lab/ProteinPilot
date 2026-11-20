@@ -1,17 +1,3 @@
-# Copyright 2021 AlQuraishi Laboratory
-# Copyright 2021 DeepMind Technologies Limited
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 from typing import Any, Optional, Tuple
 
@@ -177,17 +163,13 @@ def quat_to_rot(quat: torch.Tensor) -> torch.Tensor:
     Returns:
         [*, 3, 3] rotation matrices
     """
-    # [*, 4, 4]
     quat = quat[..., None] * quat[..., None, :]
 
-    # [4, 4, 3, 3]
     mat = quat.new_tensor(_QTR_MAT, requires_grad=False)
 
-    # [*, 4, 4, 3, 3]
     shaped_qtr_mat = mat.view((1,) * len(quat.shape[:-2]) + mat.shape)
     quat = quat[..., None, None] * shaped_qtr_mat
 
-    # [*, 3, 3]
     return torch.sum(quat, dim=(-3, -4))
 
 
@@ -313,7 +295,6 @@ class Rotation:
         ):
             raise ValueError("Incorrectly shaped rotation matrix or quaternion")
 
-        # Force full-precision
         if quats is not None:
             quats = quats.type(torch.float32)
         if rot_mats is not None:
@@ -367,7 +348,6 @@ class Rotation:
         else:
             raise ValueError(f"Invalid format: f{fmt}")
 
-    # Magic methods
 
     def __getitem__(self, index: Any):
         """
@@ -444,7 +424,6 @@ class Rotation:
         """
         return self.__mul__(left)
 
-    # Properties
 
     @property
     def shape(self) -> torch.Size:
@@ -571,7 +550,6 @@ class Rotation:
             The stored rotation as a axis-angle vector.
         """
         quat = self.get_quats()
-        # w > 0 to ensure 0 <= angle <= pi
         flip = (quat[..., :1] < 0).float()
         quat = (-1 * quat) * flip + (1 - flip) * quat
 
@@ -588,7 +566,6 @@ class Rotation:
         rot_vec = rot_vec_scale[..., None] * quat[..., 1:]
         return rot_vec
 
-    # Rotation functions
 
     def compose_q_update_vec(
         self,
@@ -703,7 +680,6 @@ class Rotation:
         else:
             raise ValueError("Both rotations are None")
 
-    # "Tensor" stuff
 
     def unsqueeze(
         self,
@@ -864,7 +840,6 @@ class Rigid:
             rots: A [*, 3, 3] rotation tensor
             trans: A corresponding [*, 3] translation tensor
         """
-        # (we need device, dtype, etc. from at least one input)
 
         batch_dims, dtype, device, requires_grad = None, None, None, None
         if trans is not None:
@@ -898,7 +873,6 @@ class Rigid:
         if (rots.shape != trans.shape[:-1]) or (rots.device != trans.device):
             raise ValueError("Rots and trans incompatible")
 
-        # Force full precision. Happens to the rotations automatically.
         trans = trans.type(torch.float32)
 
         self._rots = rots
@@ -1366,7 +1340,7 @@ class Rigid:
         Returns:
             A transformation object with a scaled translation.
         """
-        fn = lambda t: t * trans_scale_factor  # noqa: E731
+        fn = lambda t: t * trans_scale_factor
         return self.apply_trans_fn(fn)
 
     def stop_rot_gradient(self):
@@ -1376,7 +1350,7 @@ class Rigid:
         Returns:
             A transformation object with detached rotations
         """
-        fn = lambda r: r.detach()  # noqa: E731
+        fn = lambda r: r.detach()
         return self.apply_rot_fn(fn)
 
     @staticmethod

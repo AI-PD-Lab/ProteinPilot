@@ -48,7 +48,6 @@ class RFD3DiffusionModule(nn.Module):
         diffusion_token_encoder,
         diffusion_transformer,
         atom_attention_decoder,
-        # upcast,
         downcast,
         use_local_token_attention=True,
         **_,
@@ -65,7 +64,6 @@ class RFD3DiffusionModule(nn.Module):
         self.n_attn_keys = n_attn_keys
         self.use_local_token_attention = use_local_token_attention
 
-        # Auxiliary
         self.process_r = linearNoBias(3, c_atom)
         self.to_r_update = nn.Sequential(RMSNorm((c_atom,)), linearNoBias(c_atom, 3))
         self.sequence_head = LinearSequenceHead(c_token=c_token)
@@ -80,7 +78,6 @@ class RFD3DiffusionModule(nn.Module):
             n_bins=self.n_bins,
         )
 
-        # Time processing
         self.fourier_embedding = nn.ModuleList(
             [FourierEmbedding(c_t_embed), FourierEmbedding(c_t_embed)]
         )
@@ -95,7 +92,6 @@ class RFD3DiffusionModule(nn.Module):
         self.process_a = LinearEmbedWithPool(c_token)
         self.process_c = nn.Sequential(RMSNorm(c_atom), linearNoBias(c_atom, c_atom))
 
-        # UNet-like architecture for processing across tokens and atoms
         self.encoder = LocalAtomTransformer(
             c_atom=c_atom, c_s=c_atom, c_atompair=c_atompair, **atom_attention_encoder
         )
@@ -126,9 +122,9 @@ class RFD3DiffusionModule(nn.Module):
 
     def scale_positions_in(self, X_noisy_L, t):
         if t.ndim == 1:
-            t = t[..., None, None]  # [B, (n_atoms), (3)]
+            t = t[..., None, None]
         elif t.ndim == 2:
-            t = t[..., None]  # [B, n_atoms, (3)]
+            t = t[..., None]
 
         if self.f_pred == "edm":
             R_noisy_L = X_noisy_L / torch.sqrt(t**2 + self.sigma_data**2)
@@ -144,7 +140,7 @@ class RFD3DiffusionModule(nn.Module):
         if t.ndim == 1:
             t = t[..., None, None]
         elif t.ndim == 2:
-            t = t[..., None]  # [B, n_atoms, (3)]
+            t = t[..., None]
 
         if self.f_pred == "edm":
             X_out_L = (self.sigma_data**2 / (self.sigma_data**2 + t**2)) * X_noisy_L + (
@@ -164,8 +160,7 @@ class RFD3DiffusionModule(nn.Module):
                 1 / 4 * torch.log(torch.clamp(t_L, min=1e-20) / self.sigma_data)
             )
         )
-        # Mask out zero-time features;
-        C_L = C_L * (t_L > 0).float()[..., None]  # [B, L, C_atom]
+        C_L = C_L * (t_L > 0).float()[..., None]
         return C_L
 
     def forward(
@@ -173,14 +168,12 @@ class RFD3DiffusionModule(nn.Module):
         X_noisy_L,
         t,
         f,
-        # Features from initialization
         Q_L_init,
         C_L,
         P_LL,
         S_I,
         Z_II,
         n_recycle=None,
-        # Chunked memory optimization parameters
         chunked_pairwise_embedder=None,
         initializer_outputs=None,
         **kwargs,
@@ -189,10 +182,9 @@ class RFD3DiffusionModule(nn.Module):
         Diffusion forward pass with recycling.
         Computes denoised positions given encoded features and noisy coordinates.
         """
-        # ... Collect inputs
         tok_idx = f["atom_to_token_map"]
         L = len(tok_idx)
-        I = tok_idx.max() + 1  # Number of tokens
+        I = tok_idx.max() + 1
         f["attn_indices"] = create_attention_indices(
             X_L=X_noisy_L,
             f=f,
@@ -200,7 +192,6 @@ class RFD3DiffusionModule(nn.Module):
             n_attn_seq_neighbours=self.n_attn_seq_neighbours,
         )
 
-        # ... Expand t tensors
         t_L = t.unsqueeze(-1).expand(-1, L) * (
             ~f["is_motif_atom_with_fixed_coord"]
         ).float().unsqueeze(0)
@@ -208,38 +199,31 @@ class RFD3DiffusionModule(nn.Module):
             ~f["is_motif_token_with_fully_fixed_coord"]
         ).float().unsqueeze(0)
 
-        # ... Create scaled positions
         R_L_uniform = self.scale_positions_in(X_noisy_L, t)
         R_noisy_L = self.scale_positions_in(X_noisy_L, t_L)
 
-        # ... Pool initial representation to sequence level
         A_I = self.process_a(R_noisy_L, tok_idx=tok_idx)
         S_I = self.downcast_c(C_L, S_I, tok_idx=tok_idx)
 
-        # ... Add batch-wise features to inputs
         Q_L = Q_L_init.unsqueeze(0) + self.process_r(R_noisy_L)
         C_L = C_L.unsqueeze(0) + self.process_time_(t_L, i=0)
         S_I = S_I.unsqueeze(0) + self.process_time_(t_I, i=1)
         C_L = C_L + self.process_c(C_L)
 
-        # ... Run Local-Atom Self Attention and Pool
         if chunked_pairwise_embedder is not None:
-            # Chunked mode: pass chunked embedder and feature dict
             Q_L = self.encoder(
                 Q_L,
                 C_L,
                 P_LL=None,
                 indices=f["attn_indices"],
-                f=f,  # Pass feature dict for chunked computation
+                f=f,
                 chunked_pairwise_embedder=chunked_pairwise_embedder,
                 initializer_outputs=initializer_outputs,
             )
         else:
-            # Standard mode: use full P_LL
             Q_L = self.encoder(Q_L, C_L, P_LL, indices=f["attn_indices"])
         A_I = self.downcast_q(Q_L, A_I=A_I, S_I=S_I, tok_idx=tok_idx)
 
-        # ... Run forward with recycling
         recycled_features = self.forward_with_recycle(
             n_recycle,
             X_noisy_L=X_noisy_L,
@@ -256,9 +240,8 @@ class RFD3DiffusionModule(nn.Module):
             initializer_outputs=initializer_outputs,
         )
 
-        # ... Collect outputs
         outputs = {
-            "X_L": recycled_features["X_L"],  # [B, L, 3] denoised positions
+            "X_L": recycled_features["X_L"],
             "sequence_indices_I": recycled_features["sequence_indices_I"],
             "sequence_logits_I": recycled_features["sequence_logits_I"],
         }
@@ -281,12 +264,9 @@ class RFD3DiffusionModule(nn.Module):
                 if not last:
                     stack.enter_context(torch.no_grad())
 
-                # Clear the autocast cache if gradients are enabled (workaround for autocast bug)
-                # See: https://github.com/pytorch/pytorch/issues/65766
                 if torch.is_grad_enabled():
                     torch.clear_autocast_cache()
 
-                # Run forward
                 recycled_features = self.process_(
                     D_II_self=recycled_features.get("D_II_self"),
                     X_L_self=recycled_features.get("X_L"),
@@ -314,7 +294,6 @@ class RFD3DiffusionModule(nn.Module):
         initializer_outputs=None,
         **_,
     ):
-        # ... Embed token level features with atom level encodings
         S_I, Z_II = self.diffusion_token_encoder(
             f=f,
             R_L=R_L_uniform,
@@ -325,7 +304,6 @@ class RFD3DiffusionModule(nn.Module):
             P_LL=P_LL,
         )
 
-        # ... Diffusion transformer
         A_I = self.diffusion_transformer(
             A_I,
             S_I,
@@ -338,26 +316,22 @@ class RFD3DiffusionModule(nn.Module):
             ),
             full=not (os.environ.get("RFD3_LOW_MEMORY_MODE", None) == "1"),
         )
-        # ... Decoder readout
-        # Check if using chunked P_LL mode
 
         if chunked_pairwise_embedder is not None:
-            # Chunked mode: pass embedder and no P_LL
             A_I, Q_L, o = self.decoder(
                 A_I,
                 S_I,
                 Z_II,
                 Q_L,
                 C_L,
-                P_LL=None,  # Not used in chunked mode
+                P_LL=None,
                 tok_idx=f["atom_to_token_map"],
                 indices=f["attn_indices"],
-                f=f,  # Pass f for chunked computation
+                f=f,
                 chunked_pairwise_embedder=chunked_pairwise_embedder,
                 initializer_outputs=initializer_outputs,
             )
         else:
-            # Original mode: use full P_LL
             A_I, Q_L, o = self.decoder(
                 A_I,
                 S_I,
@@ -369,7 +343,6 @@ class RFD3DiffusionModule(nn.Module):
                 indices=f["attn_indices"],
             )
 
-        # ... Process outputs to positions update
         R_update_L = self.to_r_update(Q_L)
         X_out_L = self.scale_positions_out(R_update_L, X_noisy_L, t_L)
 

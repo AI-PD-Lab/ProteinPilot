@@ -43,14 +43,12 @@ print("Atomworks version:", atomworks.__version__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Same as train.py
 rootutils.setup_root(__file__ + "/../..", indicator=".project-root", pythonpath=True)
 _config_path = "pkg://configs"
 
 print("_config_path:", _config_path)
 print(os.getcwd())
 
-# Set globals
 DEBUG_MODE_USERS = ["jbutch"]
 DEBUG_MODE = getpass.getuser() in DEBUG_MODE_USERS
 seed = 42
@@ -63,7 +61,7 @@ PATH_TO_REPO_ROOT = os.path.dirname(os.path.abspath(__file__)) + "/../../.."
 
 
 def load_inference_cfg():
-    GlobalHydra.instance().clear()  # Clear existing context
+    GlobalHydra.instance().clear()
     with patch.object(sys, "argv", ["compile_cfg"]):
         initialize(config_path=_config_path, version_base="1.3", job_name="engine_cfg")
         cfg = compose(
@@ -77,7 +75,7 @@ def load_inference_cfg():
 
 
 def load_train_or_val_cfg(name="pretrain", is_val_cfg=False):
-    GlobalHydra.instance().clear()  # Clear existing context
+    GlobalHydra.instance().clear()
     with patch.object(sys, "argv", ["compile_cfg"]):
         initialize(config_path=_config_path, version_base="1.3", job_name="trainer_cfg")
         cfg = compose(
@@ -92,10 +90,6 @@ def load_train_or_val_cfg(name="pretrain", is_val_cfg=False):
 TEST_CFG_INFERENCE = load_inference_cfg()
 TEST_CFG_TRAIN = load_train_or_val_cfg()
 
-
-##########################################################################################
-# Additional utilities
-##########################################################################################
 
 DIRS = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../../tests"),
@@ -169,7 +163,6 @@ def instantiate_example(args, is_inference=True):
     else:
         file = args.get("input")
         if file is None:
-            # args = filter_inference_args(args)
             atom_array, spec = create_atom_array_from_design_specification(**args)
             outdir = tempfile.TemporaryDirectory()
             outdir = Path(outdir.name)
@@ -187,15 +180,12 @@ def instantiate_example(args, is_inference=True):
             **STANDARD_PARSER_ARGS,
         )
         input = {
-            "atom_array": result_dict["assemblies"]["1"][0],  # First model
+            "atom_array": result_dict["assemblies"]["1"][0],
             "chain_info": result_dict["chain_info"],
             "ligand_info": result_dict["ligand_info"],
             "metadata": result_dict["metadata"],
         }
     return input
-
-
-# Pre-build pipeline | in debug mode, exclude random augmentation so that the noise scales are more clear
 
 
 def build_pipelines(
@@ -255,12 +245,8 @@ def get_train_dataloader(cfg_name="pretrain", seed=42):
 
     seed_everything(seed, workers=True, verbose=True)
 
-    # Number of examples per epoch (accross all GPUs)
-    # (We must sample this many indices from our sampler)
     n_examples_per_epoch = cfg.trainer.n_examples_per_epoch
 
-    # HACK: I'm getting OOMS using the full parquets, so overwrite with these
-    # NOTE: If using this test, check that your desired use-case is represented in these mini-datasets!
     try:
         PATH_TO_DATADIR_ROOT = "/projects/ml/datahub/dfs/af3_splits/2024_12_16/"
         if "interface" in cfg.datasets.train.pdb.sub_datasets:
@@ -274,10 +260,6 @@ def get_train_dataloader(cfg_name="pretrain", seed=42):
     except Exception as e:
         print("Could not overwrite dataset paths for train dataloader:", e)
 
-    # ... build the train dataset
-    # assert (
-    #     "train" in cfg.datasets and cfg.datasets.train
-    # ), "No 'train' dataloader configuration provided! If only performing validation, use `validate.py` instead."
     dataset_and_sampler = recursively_instantiate_datasets_and_samplers(
         cfg.datasets.train
     )
@@ -333,7 +315,6 @@ def build_pipes_constant():
             TEST_CFG_TRAIN.datasets.train.pdb.sub_datasets.pn_unit.dataset.transform
         ),
     }
-    # Standardize crop size and atom array return
     pipes = {}
     for is_inference, cfg in cfgs.items():
         OmegaConf.set_struct(cfg, False)
@@ -342,9 +323,6 @@ def build_pipes_constant():
         cfg.crop_size = 9999
         cfg.max_atoms_in_crop = 99999
         pipes[is_inference] = hydra.utils.instantiate(cfg)
-        # pipes[is_inference] = build_atom14_base_pipeline(
-        #     **cfg,
-        # )
     if DEBUG_MODE:
         from rfd3.testing.debug_utils import to_debug_pipe
 

@@ -1,10 +1,4 @@
 #!/bin/bash
-# Harmonia-RFD3 SS/ADJ inference on the local GPU(s) (no scheduler).
-#
-#   CKPT=checkpoints/Harmonia-RFD3.ckpt INPUT_JSON=/path/inputs.json OUT_ROOT=out bash run_normal_ss_adj_inference.sh
-#
-# If INPUT_JSON is unset, a small example JSON plus tensors is generated in OUT_ROOT/input.
-# Run it from anywhere; paths resolve against the repo (rfd3/). Wrap it in your own sbatch/srun header on a cluster.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

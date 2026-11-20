@@ -87,20 +87,10 @@ def generate_atom_mappings_(scheme="atom14"):
 
         assert set(mapping) == set(range(len(scheme_names)))
 
-        # atom_mapping[aaa] = mapping
         atom_mapping[aaa] = mapping
 
-        ##################################################################
-        # Temporarily comment this out
-        # if aaa in symmetric_atomchar:
-        #     symmetry_mapping[aaa] = []
-        #     for group in symmetric_atomchar[aaa]:
-        #         indices = [atom14_names.index(name) for name in group]
-        #         symmetry_mapping[aaa].append(indices)
         symmetry_mapping = {}
-        ##################################################################
 
-    # Test that the mapping is valid
     for aaa in atom_mapping.keys():
         idxs = atom_mapping[aaa]
 
@@ -119,21 +109,14 @@ def generate_atom_mappings_(scheme="atom14"):
 def permute_symmetric_atom_names_(
     atom_names: list, res_name: str, association_map: dict, symmetry_map: dict
 ) -> list:
-    # NB: Can leak GT sequence if the model receives the canconical ordering of atoms as input
-    # With the structure-local atom attention it will not unless N_keys(n_attn_seq_neighbours) > n_atom_attn_queries.
     if res_name in association_map:
         idx_to_swap = association_map[res_name]
         atom_names = atom_names[idx_to_swap]
         if res_name in symmetry_map:
             for group in symmetry_map[res_name]:
-                if np.random.rand() < 0.5:  # random swap
+                if np.random.rand() < 0.5:
                     atom_names[group] = atom_names[group[::-1]]
     return atom_names
-
-
-#####################################################################################################
-# Virtual atom transforms
-#####################################################################################################
 
 
 class PadTokensWithVirtualAtoms(Transform):
@@ -173,12 +156,10 @@ class PadTokensWithVirtualAtoms(Transform):
             is_motif_atom_with_fixed_seq
         ), "Token ids and token level array have different lengths!"
 
-        # Unindexed tokens are never fully atomized, but may be assigned as atomized to have repr atoms:
         is_residue = (
             token_level_array.is_protein & ~token_level_array.atomize
         ) | is_motif_token_unindexed
 
-        # Unindexed tokens are never padded, and so are treated as residues with fixed sequence.
         is_paddable = is_residue & ~(
             is_motif_atom_with_fixed_seq | is_motif_token_unindexed
         )
@@ -186,15 +167,12 @@ class PadTokensWithVirtualAtoms(Transform):
             is_motif_atom_with_fixed_seq | is_motif_token_unindexed
         )
 
-        # Collect virtual atoms to insert (we will insert them all at once)
         virtual_atoms_to_insert = []
         insert_positions = []
 
-        # First pass: collect virtual atoms for insertion
         for token_id, (start, end) in enumerate(zip(starts[:-1], starts[1:])):
             if is_paddable[token_id]:
                 token = atom_array[start:end]
-                # First, pad with virtual atoms if needed
                 n_pad = self.n_atoms_per_token - len(token)
                 if n_pad > 0:
                     mask = get_af3_token_representative_masks(
@@ -202,7 +180,6 @@ class PadTokensWithVirtualAtoms(Transform):
                     )
                     assert_single_representative(token)
 
-                    # ... Create virtual atoms
                     pad_atoms = token[mask].copy()
                     pad_atoms = (
                         pad_atoms[0]
@@ -211,17 +188,13 @@ class PadTokensWithVirtualAtoms(Transform):
                     )
                     pad_atoms.element = VIRTUAL_ATOM_ELEMENT_NAME
 
-                    # ... Expand to desired number of atoms
                     pad_array = struc.array([pad_atoms] * n_pad)
 
-                    # ... Change occupancy | if any atom in the token has occupancy, set to 1.0
                     occ = 1.0 if pad_atoms.occupancy.sum() > 0.0 else 0.0
                     pad_array.occupancy = np.full(n_pad, occ)
 
-                    # ... Even if the input pad_atoms are all motif, we don't ever want padded atoms to be motif
                     pad_array.is_motif_atom = np.zeros(n_pad, dtype=bool)
 
-                    # Handle multidimensional annotations
                     def _fix_multidimensional_annotations_in_pad_array(
                         atomarray, padarray
                     ):
@@ -238,11 +211,9 @@ class PadTokensWithVirtualAtoms(Transform):
                         token, pad_array
                     )
 
-                    # Collect virtual atoms for later insertion
                     virtual_atoms_to_insert.append(pad_array)
                     insert_positions.append(end)
 
-        # Insert all virtual atoms at once using insert_atoms
         if virtual_atoms_to_insert:
             atom_array_padded = insert_atoms(
                 atom_array, virtual_atoms_to_insert, insert_positions
@@ -250,21 +221,17 @@ class PadTokensWithVirtualAtoms(Transform):
         else:
             atom_array_padded = atom_array
 
-        # Initialize gt_atom_name annotation if it doesn't exist
         if "gt_atom_name" not in atom_array_padded.get_annotation_categories():
             atom_array_padded.set_annotation(
                 "gt_atom_name", np.empty(len(atom_array_padded), dtype="U4")
             )
 
-        # Second pass: process tokens with proper atom name assignment after padding
-        # Get updated token starts after padding
         starts_padded = get_token_starts(atom_array_padded, add_exclusive_stop=True)
 
         for token_id, (start, end) in enumerate(
             zip(starts_padded[:-1], starts_padded[1:])
         ):
             if is_paddable[token_id]:
-                # ... Permutation of atom names during training
                 if not data["is_inference"] and exists(self.association_scheme):
                     atom_names = permute_symmetric_atom_names_(
                         ATOM14_ATOM_NAMES,
@@ -278,7 +245,6 @@ class PadTokensWithVirtualAtoms(Transform):
                 atom_array_padded.get_annotation("gt_atom_name")[start:end] = atom_names
 
             elif is_non_paddable_residue[token_id]:
-                # When sequence-constrained, we want to directly map the residue name based on the sequence
                 atom_names, res_name = (
                     atom_array_padded.atom_name[start:end],
                     atom_array_padded.res_name[start],
@@ -289,11 +255,9 @@ class PadTokensWithVirtualAtoms(Transform):
                 )
                 atom_array_padded.atom_name[start:end] = atom_names
             else:
-                # ... Add gt_atom_name annotation to other tokens
                 atom_names = atom_array_padded.atom_name[start:end]
                 atom_array_padded.get_annotation("gt_atom_name")[start:end] = atom_names
 
-            # ... Update atom array
             assert {VIRTUAL_ATOM_ELEMENT_NAME} != set(
                 atom_array_padded.element[start:end].tolist()
             ), (

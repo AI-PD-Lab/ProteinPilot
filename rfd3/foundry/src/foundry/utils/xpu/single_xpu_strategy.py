@@ -42,6 +42,5 @@ class SingleXPUStrategy(SingleDeviceStrategy):
             device=device,
             checkpoint_io=checkpoint_io,
         )
-        # Precision is handled via the _precision property in newer Lightning versions
         if precision_plugin is not None:
             self._precision = precision_plugin

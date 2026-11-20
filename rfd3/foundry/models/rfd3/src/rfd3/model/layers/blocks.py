@@ -35,7 +35,6 @@ from foundry.utils.torch import scatter_mean
 logger = logging.getLogger(__name__)
 
 
-# SwiGLU transition block with adaptive layernorm
 class ConditionedTransitionBlock(nn.Module):
     def __init__(self, c_token, c_s, n=2):
         super().__init__()
@@ -50,16 +49,12 @@ class ConditionedTransitionBlock(nn.Module):
 
     def forward(
         self,
-        Ai,  # [B, I, C_token]
-        Si,  # [B, I, C_token]
+        Ai,
+        Si,
     ):
         Ai = self.ada_ln(Ai, Si)
-        # BUG: This is not the correct implementation of SwiGLU
-        # Bi = torch.sigmoid(self.linear_1(Ai)) * self.linear_2(Ai)
-        # FIX: This is the correct implementation of SwiGLU
         Bi = torch.nn.functional.silu(self.linear_1(Ai)) * self.linear_2(Ai)
 
-        # Output projection (from adaLN-Zero)
         return self.linear_output_project(Si) * self.linear_3(Bi)
 
 
@@ -78,7 +73,6 @@ class PositionPairDistEmbedder(nn.Module):
 
         P_LL = self.process_d(D_LL) * V_LL
 
-        # Embed pairwise inverse squared distances, and the valid mask
         if self.training:
             P_LL = (
                 P_LL
@@ -103,7 +97,6 @@ class PositionPairDistEmbedder(nn.Module):
         V_LL = valid_mask
 
         if self.embed_frame:
-            # Embed pairwise distances
             return self.forward_af3(D_LL, V_LL)
         norm = torch.linalg.norm(D_LL, dim=-1, keepdim=True) ** 2
         norm = torch.clamp(norm, min=1e-6)
@@ -158,7 +151,7 @@ class SinusoidalDistEmbed(nn.Module):
         assert c_atompair % 2 == 0, "Output embedding dim must be even"
 
         self.n_freqs = (
-            n_freqs  # Number of sin/cos pairs → total sinusoidal dim = 2 * n_freqs
+            n_freqs
         )
         self.c_atompair = c_atompair
 
@@ -173,28 +166,24 @@ class SinusoidalDistEmbed(nn.Module):
         Returns:
             P_LL: [L, L, c_atompair] or [B, L, L, c_atompair]
         """
-        # Compute pairwise distances
-        D_LL = pos.unsqueeze(-2) - pos.unsqueeze(-3)  # [L, L, 3] or [B, L, L, 3]
-        dist_matrix = torch.linalg.norm(D_LL, dim=-1)  # [L, L] or [B, L, L]
+        D_LL = pos.unsqueeze(-2) - pos.unsqueeze(-3)
+        dist_matrix = torch.linalg.norm(D_LL, dim=-1)
 
-        # Sinusoidal embedding
         half_dim = self.n_freqs
         freq = torch.exp(
             -math.log(10000.0)
             * torch.arange(0, half_dim, dtype=torch.float32)
             / half_dim
-        ).to(dist_matrix.device)  # [n_freqs]
+        ).to(dist_matrix.device)
 
-        angles = dist_matrix.unsqueeze(-1) * freq  # [..., D/2]
+        angles = dist_matrix.unsqueeze(-1) * freq
         sin_embed = torch.sin(angles)
         cos_embed = torch.cos(angles)
-        sincos_embed = torch.cat([sin_embed, cos_embed], dim=-1)  # [..., D]
+        sincos_embed = torch.cat([sin_embed, cos_embed], dim=-1)
 
-        # Linear projection
-        P_LL = self.output_proj(sincos_embed)  # [..., c_atompair]
+        P_LL = self.output_proj(sincos_embed)
         P_LL = P_LL * valid_mask
 
-        # Add linear embedding of valid mask
         P_LL = P_LL + self.process_valid_mask(valid_mask.to(P_LL.dtype)) * valid_mask
         return P_LL
 
@@ -249,9 +238,6 @@ class SimpleRecycler(nn.Module):
                 for _ in range(n_pairformer_blocks)
             ]
         )
-        # Templates and msa's removed:
-        # self.template_embedder = TemplateEmbedder(c_z=c_z, **template_embedder)
-        # self.msa_module = MSAModule(**msa_module)
 
     def forward(
         self,
@@ -264,9 +250,6 @@ class SimpleRecycler(nn.Module):
     ):
         Z_II = Z_init_II + self.process_zh(Z_II)
 
-        # Templates and msa's removed:
-        # Z_II = Z_II + self.template_embedder(f, Z_II)
-        # Z_II = self.msa_module(f, Z_II, S_inputs_I)
 
         S_I = S_init_I + self.process_sh(S_I)
         for block in self.pairformer_stack:
@@ -287,7 +270,7 @@ class RelativePositionEncodingWithIndexRemoval(nn.Module):
 
         self.num_tok_pos_bins = (
             2 * self.r_max + 2
-        ) + 1  # original af3 + 1 for unknown index
+        ) + 1
         self.linear = linearNoBias(
             2 * self.num_tok_pos_bins + (2 * self.s_max + 2) + 1, c_z
         )
@@ -322,10 +305,7 @@ class RelativePositionEncodingWithIndexRemoval(nn.Module):
             2 * self.r_max + 1,
         )
 
-        # Chain distances are kept
         d_chain_II = torch.where(
-            # NOTE: Implementing bugfix from the Protenix Technical report, where we use `same_entity` instead of `not same_chain` (as in the AF-3 pseudocode)
-            # Reference: https://github.com/bytedance/Protenix/blob/main/Protenix_Technical_Report.pdf
             b_same_entity_II,
             torch.clip(
                 f["sym_id"].unsqueeze(-1) - f["sym_id"].unsqueeze(-2) + self.s_max,
@@ -336,19 +316,15 @@ class RelativePositionEncodingWithIndexRemoval(nn.Module):
         )
         A_relchain_II = one_hot(d_chain_II.long(), 2 * self.s_max + 2)
 
-        #########################################################
-        # Cancel out distances from unidexed motifs
         unindexing_pair_mask = f[
             "unindexing_pair_mask"
-        ]  # [L, L] representing the parts which shouldnt' talk to one another
+        ]
 
-        # Special position case
         d_token_II[unindexing_pair_mask] = self.num_tok_pos_bins - 1
         d_residue_II[unindexing_pair_mask] = self.num_tok_pos_bins - 1
 
         A_relpos_II = one_hot(d_residue_II.long(), self.num_tok_pos_bins)
         A_reltoken_II = one_hot(d_token_II, self.num_tok_pos_bins)
-        #########################################################
 
         return self.linear(
             torch.cat(
@@ -378,43 +354,32 @@ class SequenceHead(nn.Module):
     def __init__(self, c_token):
         super(SequenceHead, self).__init__()
 
-        # Distogram feature extraction
         self.dist_fc1 = nn.Linear(196, 128)
         self.dist_relu = nn.ReLU()
         self.dist_fc2 = nn.Linear(128, 64)
 
-        # Embedding feature extraction
         self.embed_fc1 = nn.Linear(c_token, 128)
         self.embed_relu = nn.ReLU()
         self.embed_fc2 = nn.Linear(128, 64)
 
-        # Fusion layer
         self.fusion_fc = nn.Linear(128, 32)
 
-        # Sequence encoding
         self.sequence_encoding_ = AF3SequenceEncoding()
 
     def forward(self, A_I, Q_L, X_L, f):
         B, L, _ = X_L.shape
         max_res_id = f["atom_to_token_map"].max().item() + 1
 
-        # Detach tensors to avoid gradients through main module
-        # X_L = X_L.detach()
-        # A_I = A_I.detach()
-        # Q_L = Q_L.detach()
 
-        # Compute distograms
         residue_distogram = torch.zeros(B, max_res_id, 14, 14, device=X_L.device)
         for i in range(max_res_id):
             residue_mask = f["atom_to_token_map"] == i
             if residue_mask.sum() == 14:
-                coords = X_L[:, residue_mask]  # (B, 14, 3)
+                coords = X_L[:, residue_mask]
                 residue_distogram[:, i] = torch.cdist(coords, coords)
 
-        # Flatten distogram
         dist_features = residue_distogram.view(B, max_res_id, 196)
 
-        # Pass through separate MLPs
         dist_out = self.dist_fc1(dist_features)
         dist_out = self.dist_relu(dist_out)
         dist_out = self.dist_fc2(dist_out)
@@ -423,7 +388,6 @@ class SequenceHead(nn.Module):
         embed_out = self.embed_relu(embed_out)
         embed_out = self.embed_fc2(embed_out)
 
-        # Fusion via concatenation
         fused = torch.cat([dist_out, embed_out], dim=-1)
         Seq_I = self.fusion_fc(fused)
 
@@ -432,7 +396,7 @@ class SequenceHead(nn.Module):
         return Seq_I, indices
 
     def decode(self, Seq_I):
-        indices = Seq_I.argmax(dim=-1)  # [B, L]
+        indices = Seq_I.argmax(dim=-1)
         return indices
 
 
@@ -452,8 +416,6 @@ class LinearSequenceHead(nn.Module):
         return logits, indices
 
     def decode(self, logits):
-        # logits: [D, L, 28]
-        # indices: [D, L] in [0,32-1]
         D, I, _ = logits.shape
         probs = F.softmax(logits, dim=-1)
         probs = probs * self.valid_out_mask[None, None, :].to(probs.device)
@@ -485,11 +447,9 @@ class Upcast(nn.Module):
             Q_IA = Q_IA + self.project(A_I)[..., None, :]
         elif self.method == "cross_attention":
             assert exists(A_I) and exists(valid_mask)
-            # Split Tokens
             A_I = rearrange(A_I, "b n (s c) -> b n s c", s=self.n_split)
             n_tokens, n_atom_per_tok = Q_IA.shape[1], Q_IA.shape[2]
 
-            # Attention mask: ..., n_atom_per_tok, n_split
             attn_mask = torch.full(
                 (n_tokens, 1, n_atom_per_tok), True, device=Q_IA.device
             )
@@ -545,7 +505,6 @@ class Downcast(nn.Module):
             A_I_update = self.project(Q_IA).sum(-2) / valid_mask.sum(-1, keepdim=True)
         elif self.method == "cross_attention":
             assert exists(A_I) and exists(valid_mask)
-            # Attention mask: ..., 1, n_atom_per_tok (1 querying token to atoms in token)
             attn_mask = valid_mask[..., None, :]
             A_I_update = self.gca(
                 q=A_I[..., None, :], kv=Q_IA, attn_mask=attn_mask
@@ -575,11 +534,6 @@ class Downcast(nn.Module):
         if squeeze:
             A_I = A_I.squeeze(0)
         return A_I
-
-
-######################################################################################
-##########################     Local Atom Transformer       ##########################
-######################################################################################
 
 
 class LocalTokenTransformer(nn.Module):
@@ -619,17 +573,13 @@ class LocalTokenTransformer(nn.Module):
         )
 
         for i, block in enumerate(self.blocks):
-            # Set checkpointing
             block.attention_pair_bias.use_checkpointing = not DISABLE_CHECKPOINTING
-            # A_I: [B, L, C_token]
-            # S_I: [B, L, C_s]
-            # Z_II: [B, L, L, C_tokenpair]
             A_I = block(
                 A_I,
                 S_I,
                 Z_II,
                 indices=indices,
-                full=full,  # (self.training and torch.is_grad_enabled()),  # Does not accelerate inference, but memory *does* scale better
+                full=full,
             )
 
         return A_I
@@ -681,9 +631,9 @@ class StructureLocalAtomTransformerBlock(nn.Module):
 
     def forward(
         self,
-        Q_L,  # [..., I, C_token]
-        C_L,  # [..., I, C_s]
-        P_LL,  # [..., I, I, C_tokenpair]
+        Q_L,
+        C_L,
+        P_LL,
         f=None,
         chunked_pairwise_embedder=None,
         initializer_outputs=None,
@@ -766,7 +716,6 @@ class CompactStreamingDecoder(nn.Module):
                 initializer_outputs=initializer_outputs,
             )
 
-        # Downcast to sequence
         A_I = self.downcast(Q_L.detach(), A_I.detach(), S_I.detach(), tok_idx=tok_idx)
 
         o = {}

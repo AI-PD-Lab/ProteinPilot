@@ -31,7 +31,6 @@ def get_default_checkpoint_dirs() -> list[Path]:
     """
     env_dirs = os.environ.get("FOUNDRY_CHECKPOINT_DIRS", "")
 
-    # For backward compatibility, also check FOUNDRY_CHECKPOINTS_DIR
     if not env_dirs:
         env_dirs = os.environ.get("FOUNDRY_CHECKPOINTS_DIR", "")
 
@@ -66,7 +65,7 @@ class RegisteredCheckpoint:
     url: str
     filename: str
     description: str
-    sha256: None = None  # Optional: add checksum for verification
+    sha256: None = None
 
     def get_default_path(self):
         checkpoint_dirs = get_default_checkpoint_dirs()
@@ -103,7 +102,6 @@ REGISTERED_CHECKPOINTS = {
         filename="ligandmpnn_v_32_010_25.pt",
         description="LigandMPNN checkpoint",
     ),
-    # Other models
     "rf3_preprint_921": RegisteredCheckpoint(
         url="https://files.ipd.uw.edu/pub/rf3/rf3_foundry_09_21_preprint_remapped.ckpt",
         filename="rf3_foundry_09_21_preprint_remapped.ckpt",

@@ -1,11 +1,10 @@
-# JBs debugging file, please create your own and go crazy!
 import logging
 import os
 import sys
 import time
 
 import hydra
-import ipdb  # noqa: F401
+import ipdb
 import numpy as np
 import rootutils
 import torch
@@ -26,7 +25,6 @@ from foundry.utils.ddp import set_accelerator_based_on_availability
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Same as train.py
 rootutils.setup_root(__file__ + "/../..", indicator=".project-root", pythonpath=True)
 _config_path = os.path.join(
     os.environ.get("PROJECT_PATH", os.environ.get("PROJECT_ROOT", "../..")), "configs"
@@ -50,7 +48,6 @@ TEST_CFG_TRAIN = (
 def forward(example, trainer, model, is_inference=is_inference):
     network_input = trainer._assemble_network_inputs(example)
 
-    # Forward pass
     if torch.cuda.is_available():
         device = "cuda:0"
     elif torch.backends.mps.is_available():
@@ -124,7 +121,7 @@ def test_conditional_forward():
     print(f"Time taken to process example: {time.time() - t0}")
 
     aa = example["atom_array"]
-    t_aa = aa[get_token_starts(aa)]  # noqa: F841
+    t_aa = aa[get_token_starts(aa)]
 
     from rfd3.testing.debug_utils import pipe_out_to_file
 
@@ -135,7 +132,7 @@ def test_conditional_forward():
     if is_inference:
         model.eval()
         trainer.state["model"].eval()
-    network_output = forward(example, trainer, model, is_inference=is_inference)  # noqa: F841
+    network_output = forward(example, trainer, model, is_inference=is_inference)
 
 
 if __name__ == "__main__":

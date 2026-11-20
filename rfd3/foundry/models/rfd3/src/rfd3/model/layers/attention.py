@@ -26,34 +26,29 @@ ranked_logger = RankedLogger(__name__, rank_zero_only=True)
 try:
     from cuequivariance_torch import attention_pair_bias as cueq_attention_pair_bias
 
-    # ranked_logger.info("Fused PairBiasAttention enabled!")
     _CUEQ_AVAILABLE = True
 except Exception:
-    # ranked_logger.warning(
-    #     "Using pytorch implementation instead of NVIDIA kernel"
-    #     "Ensure you are using the latest apptainer."
-    # )
     _CUEQ_AVAILABLE = False
 
 
 @torch.compiler.disable
 def kernel_pairbias_attention(
     *,
-    s: torch.Tensor,  # (B, U, D) sequence features used for gating/output inside the kernel
-    q: torch.Tensor,  # (B, H, U, DH)
-    k: torch.Tensor,  # (B, H, V, DH)
-    v: torch.Tensor,  # (B, H, V, DH)
-    z: torch.Tensor,  # (B, U, V, z_dim)
-    mask: torch.Tensor | None,  # (B, V) or (B*M, V) with 1=keep, 0=mask
+    s: torch.Tensor,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    z: torch.Tensor,
+    mask: torch.Tensor | None,
     num_heads: int,
-    w_proj_z: torch.Tensor,  # (H, z_dim)
-    w_proj_g: torch.Tensor,  # (D, D)
-    w_proj_o: torch.Tensor,  # (D, D)
-    w_ln_z: torch.Tensor,  # (z_dim,)
-    b_ln_z: torch.Tensor,  # (z_dim,)
-    b_proj_z: torch.Tensor | None = None,  # (H,)
-    b_proj_g: torch.Tensor | None = None,  # (D,)
-    b_proj_o: torch.Tensor | None = None,  # (D,)
+    w_proj_z: torch.Tensor,
+    w_proj_g: torch.Tensor,
+    w_proj_o: torch.Tensor,
+    w_ln_z: torch.Tensor,
+    b_ln_z: torch.Tensor,
+    b_proj_z: torch.Tensor | None = None,
+    b_proj_g: torch.Tensor | None = None,
+    b_proj_o: torch.Tensor | None = None,
     attn_scale: float | None = None,
     compute_pair_bias: bool = True,
     multiplicity: int = 1,
@@ -80,12 +75,7 @@ def kernel_pairbias_attention(
         compute_pair_bias=compute_pair_bias,
         multiplicity=multiplicity,
     )
-    return out  # (B, U, D)
-
-
-######################################################################################
-##########################        Network Modules           ##########################
-######################################################################################
+    return out
 
 
 class GatedCrossAttention(nn.Module):
@@ -127,7 +117,6 @@ class GatedCrossAttention(nn.Module):
         self.reset_parameter()
 
     def reset_parameter(self):
-        # query/key/value projection: Xavier uniform
         nn.init.xavier_uniform_(self.to_q.weight)
         nn.init.xavier_uniform_(self.to_k.weight)
         nn.init.xavier_uniform_(self.to_v.weight)
@@ -156,7 +145,7 @@ class GatedCrossAttention(nn.Module):
         q, k, v, g = map(
             lambda t: rearrange(t, "b t n (h c) -> b h t n c", h=self.n_head),
             (q, k, v, g),
-        )  # [B, tok, n, heads, c] ->  [B, heads, tok, n, c]
+        )
 
         attn = einsum("bhtqc,bhtkc->bhtqk", q, k) * self.scale
 
@@ -165,15 +154,12 @@ class GatedCrossAttention(nn.Module):
             b = rearrange(b, "b t q k (h) -> b (h) t q k", h=self.n_head)
             attn = attn + b
 
-        # Invalid query handling:
         if attn_mask is not None:
             attn = attn.masked_fill(~attn_mask[None, None], float("-inf"))
 
-            # Bugfix: Empty queries need to have a constant value otherwise nans are in the forward graph. I don't
-            # know why this causes instabilities because the invalid queries are masked out later. Oh well!
             invalid_queries = torch.logical_not(
                 torch.any(attn_mask, dim=-1, keepdim=False)
-            )  # [n_q,]
+            )
             attn[:, :, invalid_queries, :] = 0.0
 
         attn = F.softmax(attn, dim=-1)
@@ -181,7 +167,7 @@ class GatedCrossAttention(nn.Module):
         attn_out = attn_out * g
 
         attn_out = rearrange(attn_out, "b h t n c -> b t n (h c)")
-        attn_out = self.to_out(attn_out)  # [B, n_tok, n_k, c]
+        attn_out = self.to_out(attn_out)
         return attn_out
 
 
@@ -197,7 +183,7 @@ class LocalAttentionPairBias(nn.Module):
         n_attn_keys=128,
     ):
         super().__init__()
-        self.c = c_a  # d_model dim same as input features
+        self.c = c_a
         self.n_head = n_head
 
         self.to_q = linearNoBias(c_a, self.c)
@@ -213,10 +199,8 @@ class LocalAttentionPairBias(nn.Module):
             self.ln_q = RMSNorm(self.c)
             self.ln_k = RMSNorm(self.c)
 
-        # Output / Input projections
-        self.to_o = linearNoBias(self.c, c_a)  # from attn to Q_L
+        self.to_o = linearNoBias(self.c, c_a)
 
-        # Conditioned
         if exists(c_s):
             self.ada_ln_1 = AdaLN(c_a=c_a, c_s=c_s)
             self.linear_output_project = nn.Sequential(
@@ -226,7 +210,6 @@ class LocalAttentionPairBias(nn.Module):
         else:
             self.ln_1 = RMSNorm(c_a)
 
-        # Used if no indices are provided
         self.n_attn_seq_neighbours = n_attn_seq_neighbours
         self.n_attn_keys = n_attn_keys
         self.use_checkpointing = True
@@ -252,7 +235,6 @@ class LocalAttentionPairBias(nn.Module):
         initializer_outputs: Dict containing features for chunked computation
         """
 
-        # If no indices are provided, prepare indices from
         if not exists(indices):
             indices = create_attention_indices(
                 f,
@@ -261,9 +243,7 @@ class LocalAttentionPairBias(nn.Module):
                 X_L=X_L,
             )
 
-        # Handle chunked P_LL computation
         if chunked_pairwise_embedder is not None and P_LL is None:
-            # Compute sparse P_LL only for the attention indices
             P_LL_sparse = chunked_pairwise_embedder.forward_chunked(
                 f=f,
                 indices=indices,
@@ -271,10 +251,8 @@ class LocalAttentionPairBias(nn.Module):
                 Z_init_II=initializer_outputs["Z_II"],
                 tok_idx=f["atom_to_token_map"],
             )
-            # P_LL_sparse is already in sparse format [D, L, k, c_pair]
             use_sparse_pll = True
         else:
-            # Original full P_LL computation
             P_LL_sparse = None
             use_sparse_pll = False
 
@@ -287,7 +265,6 @@ class LocalAttentionPairBias(nn.Module):
                 Q_L = self.ln_1(Q_L)
 
             if use_kernel and not use_sparse_pll:
-                # TODO: Update with latest kernel
                 q, k, v, g, b = (
                     self.to_q(Q_L),
                     self.to_k(Q_L),
@@ -297,20 +274,19 @@ class LocalAttentionPairBias(nn.Module):
                 )
                 q, k = (self.ln_q(q), self.ln_k(k)) if self.kq_norm else (q, k)
                 attn_out = _fused_full_pairbias_attention(
-                    Q_L=q,  # already projected queries (B, L, c)
+                    Q_L=q,
                     K_L=k,
                     V_L=v,
-                    P_LL=P_LL,  # pair features (B, L, L, c_pair)
+                    P_LL=P_LL,
                     num_heads=self.n_head,
-                    to_b=None,  # pair-bias projector (H, c_pair)
-                    to_g_linear=None,  # gating linear (D, D)
-                    to_o_linear=None,  # output linear (D, D)
+                    to_b=None,
+                    to_g_linear=None,
+                    to_o_linear=None,
                     w_ln_z_identity=None,
                     b_ln_z_identity=None,
                     attn_scale=1.0 / math.sqrt(self.c // self.n_head),
                 )
             else:
-                # Sparse attention path
                 q, k, v, g = (
                     self.to_q(Q_L),
                     self.to_k(Q_L),
@@ -320,21 +296,19 @@ class LocalAttentionPairBias(nn.Module):
                 q, k = (self.ln_q(q), self.ln_k(k)) if self.kq_norm else (q, k)
 
                 if use_sparse_pll:
-                    # Use pre-computed sparse P_LL (already gathered)
-                    b = self.to_b(P_LL_sparse)  # [D, L, k, H]
+                    b = self.to_b(P_LL_sparse)
                     attn_out = sparse_pairbias_attention(
                         Q=q,
                         K=k,
                         V=v,
                         B=b,
                         G=g,
-                        gather_bias=False,  # Already gathered!
+                        gather_bias=False,
                         indices=indices,
                         H=self.n_head,
                         full=full,
-                    )  # [D, L, c]
+                    )
                 else:
-                    # Original full P_LL path
                     b = self.to_b(P_LL)
                     attn_out = sparse_pairbias_attention(
                         Q=q,
@@ -346,9 +320,8 @@ class LocalAttentionPairBias(nn.Module):
                         indices=indices,
                         H=self.n_head,
                         full=full,
-                    )  # [D, L, c]
+                    )
 
-            # Output projection (from adaLN-Zero)
             Q_L = self.to_o(attn_out)
             if exists(C_L):
                 Q_L = self.linear_output_project(C_L) * Q_L
@@ -361,16 +334,10 @@ class LocalAttentionPairBias(nn.Module):
             else do_attention
         )
 
-        # Call attention with appropriate P_LL
         if use_sparse_pll:
             return do_attention_(Q_L, C_L, P_LL_sparse)
         else:
             return do_attention_(Q_L, C_L, P_LL)
-
-
-######################################################################################
-##########################        Kernel Functions          ##########################
-######################################################################################
 
 
 def sparse_pairbias_attention(
@@ -391,10 +358,9 @@ def sparse_pairbias_attention(
     attn_out: (D, L, c)  # attention output
     """
     D, L, c = Q.shape
-    k = indices.shape[-1]  # k_neigh
+    k = indices.shape[-1]
 
     if full:
-        # During training, compute full attention matrix to create a more optimized torch.tensor graph.
         return pairbias_attention_(
             Q=Q,
             K=K,
@@ -405,53 +371,47 @@ def sparse_pairbias_attention(
             G=G,
         )
 
-    # Pull vectors from dimension 1 into index torch.tensor according to unique k_neigh axis
-    batch_idx = torch.arange(D, device=Q.device).view(-1, 1, 1)  # (D,1,1)
-    K_gathered = K[batch_idx, indices].contiguous()  # (D, L, k, c)
-    V_gathered = V[batch_idx, indices].contiguous()  # (D, L, k, c)
+    batch_idx = torch.arange(D, device=Q.device).view(-1, 1, 1)
+    K_gathered = K[batch_idx, indices].contiguous()
+    V_gathered = V[batch_idx, indices].contiguous()
 
-    # Gather bias or assume pre-gathered
     if gather_bias:
-        query_idx = torch.arange(L, device=Q.device).view(1, L, 1)  # (1,L,1)
+        query_idx = torch.arange(L, device=Q.device).view(1, L, 1)
         query_idx = query_idx.expand(D, -1, k)
         if B.ndim == 3:
-            B_gathered = B[query_idx, indices, :]  # (D, L, k, H)
-        elif B.ndim == 4:  # (D, L, L, H)
-            B_gathered = B[batch_idx, query_idx, indices, :]  # (D, L, k, H)
+            B_gathered = B[query_idx, indices, :]
+        elif B.ndim == 4:
+            B_gathered = B[batch_idx, query_idx, indices, :]
     else:
         assert B.shape == (D, L, k, H), "B must be batched with shape (D, L, k, H)"
         B_gathered = B
     B_gathered = B_gathered.contiguous()
 
-    # Split into heads
     Q = Q.reshape(D, L, H, c // H)
     K_gathered = K_gathered.reshape(D, L, k, H, c // H)
     V_gathered = V_gathered.reshape(D, L, k, H, c // H)
     B_gathered = B_gathered.reshape(D, L, k, H)
-    Q = Q.permute(0, 2, 1, 3)  # [D, H, L, c // H]
+    Q = Q.permute(0, 2, 1, 3)
     K_gathered = K_gathered.permute(0, 3, 1, 2, 4)
     V_gathered = V_gathered.permute(0, 3, 1, 2, 4)
     B_gathered = B_gathered.permute(0, 3, 1, 2)
 
-    # Do attention
     attn = torch.einsum("...ld,...lkd->...lk", Q, K_gathered)
-    attn = attn / sqrt(c // H)  # scale
-    attn = attn + B_gathered  # add bias
-    attn = torch.softmax(attn, dim=-1)  # softmax over keys [D, H, L, k]
+    attn = attn / sqrt(c // H)
+    attn = attn + B_gathered
+    attn = torch.softmax(attn, dim=-1)
     attn_out = torch.einsum(
         "...ij,...ijc->...ic", attn, V_gathered
-    )  # allocates a max of 4.95 GiB.
+    )
 
-    # Optional gating
     if G is not None:
         G = G.reshape(D, L, H, c // H).permute(0, 2, 1, 3)
         attn_out = attn_out * G
 
-    # Merge heads
     attn_out = attn_out.permute(0, 2, 1, 3)
     attn_out = attn_out.reshape(D, L, c).contiguous()
 
-    return attn_out  # [D, L, c]
+    return attn_out
 
 
 def pairbias_attention_(Q, K, V, B, H, valid_mask=None, G=None):
@@ -464,34 +424,28 @@ def pairbias_attention_(Q, K, V, B, H, valid_mask=None, G=None):
     D, L, c = Q.shape
     k = L
 
-    # Split into heads
     Q = Q.reshape(D, L, H, c // H)
     K = K.reshape(D, k, H, c // H)
     V = V.reshape(D, k, H, c // H)
     B = B.reshape(D, L, k, H)
 
-    # Flip heads upwards [..., H, d_model] -> [B, H, ..., d_model]
-    Q = Q.permute(0, 2, 1, 3)  # [D, H, L, c // H]
+    Q = Q.permute(0, 2, 1, 3)
     K = K.permute(0, 2, 1, 3)
     V = V.permute(0, 2, 1, 3)
     B = B.permute(0, 3, 1, 2)
 
-    # Do attention
     attn = torch.einsum("...ld,...kd->...lk", Q, K)
-    attn = attn / sqrt(c // H)  # scale
-    attn = attn + B  # add bias
+    attn = attn / sqrt(c // H)
+    attn = attn + B
     if exists(valid_mask):
-        # expand valid mask over heads [D, H, L, L]
         attn = attn.masked_fill(~valid_mask.unsqueeze(1), float("-inf"))
-    attn = torch.softmax(attn, dim=-1)  # softmax over keys [D, H, L, k]
+    attn = torch.softmax(attn, dim=-1)
     attn_out = torch.einsum("...ij,...jc->...ic", attn, V)
 
-    # Optional gating
     if G is not None:
         G = G.reshape(D, L, H, c // H).permute(0, 2, 1, 3)
         attn_out = attn_out * G
 
-    # Merge heads
     attn_out = attn_out.permute(0, 2, 1, 3)
     attn_out = attn_out.reshape(D, L, c).contiguous()
 
@@ -500,16 +454,16 @@ def pairbias_attention_(Q, K, V, B, H, valid_mask=None, G=None):
 
 def _fused_full_pairbias_attention(
     *,
-    Q_L,  # (B, L, c)  -- sequence features used to make q,k,v and for gating
-    K_L,  # (B, L, c)
-    V_L,  # (B, L, c)
-    P_LL,  # (B, L, L, c_pair)
+    Q_L,
+    K_L,
+    V_L,
+    P_LL,
     num_heads: int,
-    to_b: nn.Linear,  # projects pair features -> heads (H)
-    to_g_linear: nn.Linear,  # weight (D, D), bias optional/None (pre-sigmoid, kernel handles gate)
-    to_o_linear: nn.Linear,  # weight (D, D), bias optional/None (kernel handles output proj)
-    w_ln_z_identity: torch.torch.Tensor,  # (c_pair,)
-    b_ln_z_identity: torch.torch.Tensor,  # (c_pair,)
+    to_b: nn.Linear,
+    to_g_linear: nn.Linear,
+    to_o_linear: nn.Linear,
+    w_ln_z_identity: torch.torch.Tensor,
+    b_ln_z_identity: torch.torch.Tensor,
     attn_scale: float | None = None,
 ):
     """
@@ -521,38 +475,29 @@ def _fused_full_pairbias_attention(
     assert c % H == 0, "Model dim must be divisible by num_heads"
     DH = c // H
 
-    # q, k, v as (B, H, L, DH)
     q = Q_L.reshape(B, L, H, DH).permute(0, 2, 1, 3).contiguous()
     k = K_L.reshape(B, L, H, DH).permute(0, 2, 1, 3).contiguous()
     v = V_L.reshape(B, L, H, DH).permute(0, 2, 1, 3).contiguous()
 
-    # s is the sequence features for gating/output projections
-    s = Q_L.contiguous()  # (B, L, c)
+    s = Q_L.contiguous()
 
-    # mask: None (kernel supports key padding mask shape (B,V) or (B*M,V); we don't need it here)
     mask = None
 
-    # weights/biases for kernel (shapes per doc):
-    # w_proj_z: (H, z_dim)
-    w_proj_z = to_b.weight  # (H, c_pair)
+    w_proj_z = to_b.weight
     b_proj_z = to_b.bias if hasattr(to_b, "bias") else None
 
-    # w_proj_g / o: (D, D)
-    w_proj_g = to_g_linear.weight  # (D, D)
+    w_proj_g = to_g_linear.weight
     b_proj_g = to_g_linear.bias if hasattr(to_g_linear, "bias") else None
 
-    w_proj_o = to_o_linear.weight  # (D, D)
+    w_proj_o = to_o_linear.weight
     b_proj_o = to_o_linear.bias if hasattr(to_o_linear, "bias") else None
 
-    # z-LN params
     w_ln_z = w_ln_z_identity.to(dtype=P_LL.dtype, device=P_LL.device)
     b_ln_z = b_ln_z_identity.to(dtype=P_LL.dtype, device=P_LL.device)
 
-    # optional scaling (match your manual path)
     if attn_scale is None:
         attn_scale = 1.0 / math.sqrt(DH)
 
-    # Call the fused kernel (B*M collapses to B here; multiplicity=1)
     out, _proj_z = cueq_attention_pair_bias(
         s=s,
         q=q,
@@ -573,5 +518,4 @@ def _fused_full_pairbias_attention(
         compute_pair_bias=True,
         multiplicity=1,
     )
-    # out: (B, L, c) already gated & projected
     return out

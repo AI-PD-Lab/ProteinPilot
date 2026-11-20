@@ -13,7 +13,6 @@ Then you can run `viz /path/to/file.cif` to visualize the structures via pymol-r
 import pathlib
 import sys
 
-# NOTE: This is needed here to enable `viz` to be used as script
 if (project_dir := str(pathlib.Path(__file__).parents[3])) not in sys.path:
     sys.path.append(project_dir)
 
@@ -57,17 +56,14 @@ def get_atom_array_style_cmd(
     commands = [f"hide everything, {obj}"]
     annotations = atom_array.get_annotation_categories()
 
-    offset = 1  # ... default offset since pymol 1-indexes atom id's
+    offset = 1
     atom_ids = np.arange(1, atom_array.array_length() + 1)
     if "atom_id" in annotations:
         offset = 0
         atom_ids = atom_array.get_annotation("atom_id")
 
-    # Convert MAS residues to ALA for compatibility
     atom_array = atom_array.copy()
-    # atom_array.res_name[atom_array.res_name == "MAS"] = "ALA"
 
-    # Style the backbone for each polymer chain with a color spectrum
     for chain_id in struc.get_chains(atom_array):
         if (~atom_array.hetero[atom_array.chain_id == chain_id]).any():
             commands.append(
@@ -75,7 +71,6 @@ def get_atom_array_style_cmd(
                 f"{obj} and chain {chain_id} and elem C"
             )
 
-    # Add basic styling commands for protein backbone and non-polymer components
     commands.extend(
         [
             f"show sticks, model {obj} and name n+c+ca+cb",
@@ -88,12 +83,10 @@ def get_atom_array_style_cmd(
         ]
     )
     if label:
-        # label 0-indexed for correspondence with biotite
         commands.append("label all, ID") if offset == 0 else commands.append(
             f"label all, ID-{offset}"
         )
 
-    # Style atoms marked for "atomize" if present
     if "atomize" in annotations and atom_array.atomize.any():
         atomize_ids = np.where(atom_array.atomize)[0]
         atomize_ids = atom_ids[atomize_ids]
@@ -104,9 +97,6 @@ def get_atom_array_style_cmd(
             ]
         )
 
-    # Style constraints, if present:
-    # 2-body:
-    # ... add distance lines between atoms if specified in annotations
     if hasattr(atom_array, "_annot_2d"):
         distance_commands = []
         if C_DIS.full_name in atom_array._annot_2d:
@@ -143,7 +133,6 @@ def get_atom_array_style_cmd(
                         continue
 
                     i, j = atom_ids[idx_i], atom_ids[idx_j]
-                    # ... if we have a stack, we grab the last frame for the distance computation
                     if isinstance(atom_array, struc.AtomArrayStack):
                         distance = struc.distance(
                             atom_array[0, idx_i], atom_array[0, idx_j]
@@ -161,7 +150,6 @@ def get_atom_array_style_cmd(
 
         commands.extend(distance_commands)
 
-    # Handle 1-D conditions (only display masks)
     for cond in Condition:
         if cond.n_body == 1 and cond.mask(atom_array, default="generate").any():
             _atom_ids = atom_ids[np.where(cond.mask(atom_array, default="generate"))[0]]
@@ -206,8 +194,6 @@ def viz(
         >>> viz(structure)
     """
     atom_array = atom_array.copy()
-    # pymol only considers chain_id annotation, which can make weird looking artifacts if we have two different chains with the same chain_id
-    # We always disambiguate by using the chain_iid annotation, so we need to have pymol use that to do the same
     if "chain_iid" in atom_array.get_annotation_categories():
         atom_array.chain_id = atom_array.get_annotation("chain_iid")
         atom_array.chain_id = atom_array.chain_id.astype(str)

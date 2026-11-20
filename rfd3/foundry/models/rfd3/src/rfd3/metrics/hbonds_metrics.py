@@ -40,15 +40,11 @@ def simplified_processing_atom_array(atom_arrays, central_atom="CB", threshold=0
         for start, end in zip(res_start_indices, res_end_indices):
             cur_res_atom_array = atom_array[start:end]
 
-            # Check if the current residue is after padding (seq unknown):
             if_seq_known = not any(
                 atom_name.startswith("V") for atom_name in cur_res_atom_array.atom_name
             )
 
             if not if_seq_known:
-                # For Glycine: it doesn't have CB, so set the virtual atom as CA.
-                # The current way to handle this is to check if predicted CA and CB are too close, because in the case of glycine and we pad virtual atoms based on CB, CB's coords are set as CA.
-                # There might be a better way to do this.
                 CA_coord = cur_res_atom_array.coord[
                     cur_res_atom_array.atom_name == "CA"
                 ]
@@ -60,21 +56,19 @@ def simplified_processing_atom_array(atom_arrays, central_atom="CB", threshold=0
 
                 central_mask = cur_res_atom_array.atom_name == central_atom
 
-                # ... Calculate the distance to the central atom
                 central_coord = cur_res_atom_array.coord[central_mask][
                     0
-                ]  # Should only have one central atom anyway
+                ]
                 dists = np.linalg.norm(
                     cur_res_atom_array.coord - central_coord, axis=-1
                 )
 
-                # ... Select virtual atom by the distance. Shouldn't count the central atom itself.
                 is_virtual = (dists < threshold) & ~central_mask
 
                 cur_res_atom_array = cur_res_atom_array[~is_virtual]
                 cur_pred_res_atom_names = (
                     cur_res_atom_array.atom_name
-                )  # e.g. [N, CA, C, O, CB, V6, V2]
+                )
 
                 has_restype_assigned = False
                 for restype, atom_names in association_schemes_stripped[
@@ -89,7 +83,7 @@ def simplified_processing_atom_array(atom_arrays, central_atom="CB", threshold=0
                             np.where(ATOM14_ATOM_NAMES == atom_name)[0][0]
                             for atom_name in cur_pred_res_atom_names
                         ]
-                    )  # [0, 1, 2, 3, 4, 11, 7]
+                    )
                     atom14_scheme_mask = np.zeros_like(ATOM14_ATOM_NAMES, dtype=bool)
                     atom14_scheme_mask[atom_name_idx_in_atom14_scheme] = True
                     if all(
@@ -122,7 +116,6 @@ def simplified_processing_atom_array(atom_arrays, central_atom="CB", threshold=0
     return final_atom_array
 
 
-# Training comparison
 def calculate_hbond_stats(
     input_atom_array_stack,
     output_atom_array_stack,
@@ -146,7 +139,6 @@ def calculate_hbond_stats(
         cutoff_dist: Cutoff distance for hbonds
         cutoff_angle: Cutoff angle for hbonds
     """
-    # Used the latest function above, should check if it works correctly
     output_atom_array_stack = simplified_processing_atom_array(output_atom_array_stack)
 
     assert len(input_atom_array_stack) == len(
@@ -168,23 +160,19 @@ def calculate_hbond_stats(
             "active_donor" in input_atom_array.get_annotation_categories()
             or "active_acceptor" in input_atom_array.get_annotation_categories()
         ):
-            # print("active donor/acceptor not in annotation")
             continue
         if np.sum(input_atom_array.active_donor == 0) and np.sum(
             input_atom_array.active_acceptor == 0
         ):
             continue
 
-        # Select possible donors and acceptors for the model output
         if selection1 is None or selection2 is None:
             continue
 
-        # Hack: Temporarily use biotite to infer bonds, should be replaced with cifutils?
         output_atom_array.bonds = struc.connect_via_distances(
             output_atom_array, default_bond_type=1
         )
 
-        # Hack: delete coords_to_be_diffused (if exists) to temporarily solve a weird bug in create hydrogens. Anyway it will not be used.
         if "coord_to_be_noised" in input_atom_array.get_annotation_categories():
             input_atom_array.del_annotation("coord_to_be_noised")
         if "coord_to_be_noised" in output_atom_array.get_annotation_categories():
@@ -220,7 +208,6 @@ def calculate_hbond_stats(
         given_hbond_donors_index = np.where(input_atom_array.active_donor == 1)[0]
         given_hbond_acceptors_index = np.where(input_atom_array.active_acceptor == 1)[0]
 
-        # Ensure the produced hbonds matches input hbond requirements: have the same atom type, residue name, and atom name
         for idx in given_hbond_donors_index:
             if bool(
                 output_atom_array[
@@ -272,11 +259,10 @@ def calculate_hbond_stats(
     )
 
 
-# Inference comparison -> tempportary fix to test out sm_hbonds, should be merged with hbond in transforms down the line
 def get_hbond_metrics(atom_array=None):
     if atom_array is None:
         print("WARNING: atom_array is None")
-        return None  # Or raise a more descriptive error
+        return None
 
     curr_copy = atom_array.copy()
     o = {}
@@ -284,9 +270,7 @@ def get_hbond_metrics(atom_array=None):
     selection2 = np.array(
         [ChainType.as_enum(item).value for item in SELECTION_NONPROTEIN]
     )
-    # Hack: Temporarily use biotite to infer bonds, should be replaced with cifutils?
     curr_copy.bonds = struc.connect_via_distances(curr_copy, default_bond_type=1)
-    # Hack: delete coords_to_be_diffused (if exists) to temporarily solve a weird bug in create hydrogens. Anyway it will not be used.
     if "coord_to_be_noised" in curr_copy.get_annotation_categories():
         curr_copy.del_annotation("coord_to_be_noised")
 
@@ -304,7 +288,6 @@ def get_hbond_metrics(atom_array=None):
     else:
         selection2 = selection2
 
-    # Always include fixed motif atoms for hbond calculations
     selection2 |= np.array(curr_copy.is_motif_atom, dtype=bool)
     selection1 = ~selection2
 
@@ -380,7 +363,6 @@ class HbondMetrics(Metric):
             )
             return {}
 
-        # Aggregate output for batch-level metrics
         o = {
             "mean_correct_donors_percent": float(mean_correct_donors_percent),
             "mean_correct_acceptors_percent": float(mean_correct_acceptors_percent),

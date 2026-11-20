@@ -40,11 +40,9 @@ class BaseInferenceEngine:
         ckpt_path: PathLike,
         num_nodes: int = 1,
         devices_per_node: int = 1,
-        # Config overrides
         transform_overrides={},
         inference_sampler_overrides={},
         trainer_overrides={},
-        # Debug
         verbose: bool = False,
         seed: int | None = None,
     ):
@@ -62,15 +60,12 @@ class BaseInferenceEngine:
         if not verbose:
             configure_minimal_inference_logging()
 
-        # Set attrs
         self.initialized_ = False
         self.trainer = None
         self.pipeline = None
         self.verbose = verbose
 
-        # Resolve checkpoint path
         if "." not in str(ckpt_path):
-            # Assume registered model
             name = str(ckpt_path)
             assert (
                 name in REGISTERED_CHECKPOINTS
@@ -90,7 +85,6 @@ class BaseInferenceEngine:
             )
         self.ckpt_path = Path(ckpt_path).resolve()
 
-        # Set random seed (only if seed is not None)
         if seed is not None:
             ranked_logger.info(f"Seeding everything with seed={seed}...")
             seed_everything(seed, workers=True, verbose=True)
@@ -98,7 +92,6 @@ class BaseInferenceEngine:
             ranked_logger.info("Seed is None - using external RNG state")
         self.seed = seed
 
-        # Stored for later;
         self.transform_overrides = transform_overrides
         self.overrides: dict[str, Any] = {}
 
@@ -118,22 +111,17 @@ class BaseInferenceEngine:
         for key, value in inference_sampler_overrides.items():
             self._assign_override(f"model.net.inference_sampler.{key}", value)
 
-    ###################################################################################
-    # Required subclasss methods
-    ###################################################################################
 
     def initialize(self):
         if self.initialized_:
             return getattr(self, "cfg", None)
 
-        # Load checkpoint and config
         ranked_logger.info(
             f"Loading checkpoint from {Path(self.ckpt_path).resolve()}..."
         )
         checkpoint = torch.load(self.ckpt_path, "cpu", weights_only=False)
         cfg = self._override_checkpoint_config(checkpoint["train_cfg"])
 
-        # Load pipeline first before trainer/model
         self._construct_pipeline(cfg)
         self._construct_trainer(cfg, checkpoint=checkpoint)
 
@@ -153,9 +141,6 @@ class BaseInferenceEngine:
             "Subclasses must implement inference logic in `run` method."
         )
 
-    ###################################################################################
-    # Util methods
-    ###################################################################################
 
     def _override_checkpoint_config(self, cfg):
         cfg = merge(cfg, self.overrides)
@@ -166,7 +151,6 @@ class BaseInferenceEngine:
         """
         Sets attr self.trainer
         """
-        # Instantiate trainer
         ranked_logger.info("Instantiating trainer...")
         if self.verbose:
             print_config_tree(
@@ -178,18 +162,16 @@ class BaseInferenceEngine:
             _recursive_=False,
         )
 
-        # Setup model
         ranked_logger.info("Setting up model...")
         trainer.fabric.launch()
         trainer.initialize_or_update_trainer_state(
             {"train_cfg": cfg}
-        )  # config from training stores net params
+        )
         trainer.construct_model()
 
         ranked_logger.info("Loading model weights from checkpoint...")
         trainer.load_checkpoint(checkpoint=checkpoint or self.ckpt_path)
 
-        # Ensure optimizer isn't loaded
         trainer.state["optimizer"] = None
         trainer.state["train_cfg"].model.optimizer = None
         trainer.setup_model_optimizers_and_schedulers()
@@ -210,14 +192,7 @@ class BaseInferenceEngine:
         """
         Sets attr self.pipeline
         """
-        # Construct pipeline
         ranked_logger.info("Building Transform pipeline...")
-        # First NON-NULL val entry. A null entry is legal in a training config -- a
-        # disabled sub-dataset is left as a key whose value is None -- but taking it
-        # here raises AttributeError on `.dataset`, and the failure is silent in the
-        # worst way: the engine produces ZERO designs while SLURM still reports the
-        # job COMPLETED. Both epoch-0694 and epoch-0700 shipped with `val.loop: null`
-        # sitting first, which cost a full benchmark run before it was noticed.
         val_cfg = getattr(cfg.datasets, "val", None) or {}
         first_val = next(((k, v) for k, v in val_cfg.items() if v is not None), None)
         if first_val is not None:
@@ -254,14 +229,12 @@ class BaseInferenceEngine:
 
         self.pipeline = hydra.utils.instantiate(transform)
 
-    # aliases for run
     def forward(self, *args, **kwargs):
         return self.run(*args, **kwargs)
 
     def __call__(self, *args, **kwargs):
         return self.run(*args, **kwargs)
 
-    # for use as a context manager: e.g. `with BaseInferenceEngine(...) as engine:` to automatically cleanup
     def __enter__(self):
         return self
 

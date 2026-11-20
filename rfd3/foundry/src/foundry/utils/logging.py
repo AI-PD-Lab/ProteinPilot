@@ -21,7 +21,6 @@ class CachedDataFilter(logging.Filter):
     """Filter to suppress atomworks cached data logging messages."""
 
     def filter(self, record):
-        # Filter out "Cached data not found" messages
         if "Cached data not found" in record.getMessage():
             return False
         return True
@@ -82,14 +81,12 @@ def suppress_warnings(is_inference: bool = False):
         with warnings.catch_warnings():
             silence_warnings()
             if is_inference:
-                # Add filter to suppress cached data messages
                 cached_data_filter = CachedDataFilter()
                 atomworks_ml_logger = logging.getLogger("atomworks.ml")
                 atomworks_ml_logger.addFilter(cached_data_filter)
 
             yield
     finally:
-        # Remove the filter
         if cached_data_filter is not None:
             atomworks_ml_logger = logging.getLogger("atomworks.ml")
             atomworks_ml_logger.removeFilter(cached_data_filter)
@@ -97,10 +94,8 @@ def suppress_warnings(is_inference: bool = False):
 
 def configure_minimal_inference_logging() -> None:
     """Configure minimal logging for inference (quiet mode)."""
-    # Suppress most logging by default
     logging.getLogger().setLevel(logging.WARNING)
 
-    # Suppress specific noisy loggers
     for logger_name in [
         "atomworks",
         "transforms",
@@ -115,11 +110,9 @@ def configure_minimal_inference_logging() -> None:
     ]:
         logging.getLogger(logger_name).setLevel(logging.ERROR)
 
-    # Keep model-specific inference engine loggers at INFO for progress messages
     logging.getLogger("rf3.inference_engines").setLevel(logging.INFO)
     logging.getLogger("rfd3.engine").setLevel(logging.INFO)
 
-    # Suppress warnings
     warnings.filterwarnings("ignore")
 
 
@@ -141,7 +134,6 @@ def print_config_tree(
     style = "dim"
     tree = Tree(title, style=style, guide_style=style)
 
-    # Generate config tree in natural order
     for field in cfg:
         branch = tree.add(field, style=style, guide_style=style)
 
@@ -153,8 +145,6 @@ def print_config_tree(
 
         branch.add(Syntax(branch_content, "yaml", word_wrap=True))
 
-    # Print config tree using Rich's Console
-    # (This call happens before instantiating other loggers, so we don't try to capture the output)
     console.print(tree)
 
 
@@ -186,13 +176,10 @@ def log_hyperparameters_with_all_loggers(
         cfg: Configuration dictionary containing hyperparameters.
         model: The model to be tracked by loggers like WandbLogger.
     """
-    # If given a DictConfig, convert it to a dictionary
     if isinstance(cfg, DictConfig):
         cfg = OmegaConf.to_container(cfg, resolve=True)
 
     for logger in trainer.fabric.loggers:
-        # ...log hyperparameters to each Fabric logger
-        # For Abstract Base Class of Fabric `Loggers`, see: https://lightning.ai/docs/fabric/stable/_modules/lightning/fabric/loggers/logger.html#Logger
         assert hasattr(
             logger, "log_hyperparams"
         ), f"Logger {logger} does not have a `log_hyperparams` method. Ensure that the logger is a subclass of Fabric's ABC `Logger`."
@@ -211,15 +198,12 @@ def condense_count_columns_of_grouped_df(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     try:
-        # Validate count structure
         count_cols = df.xs("count", level=1, axis=1)
         mean_cols = df.xs("mean", level=1, axis=1)
 
-        # Check count consistency per row and column existence
         if not (count_cols.nunique(axis=1) == 1).all():
             return df
 
-        # Build condensed dataframe
         condensed_df = mean_cols.rename(columns=lambda c: f"{c} (mean)")
         condensed_df["Count"] = count_cols.iloc[:, 0].astype(int)
         return condensed_df
@@ -232,18 +216,15 @@ def table_from_df(df: pd.DataFrame, title: str) -> Table:
     """Create a Rich Table from a DataFrame."""
     table = Table(title=title, show_header=True, header_style="bold cyan")
 
-    # Add columns to the table
     for col in df.columns:
         table.add_column(col, justify="right", style="magenta", overflow="fold")
 
-    # Iterate through DataFrame rows and add them to the table
     for _, row in df.iterrows():
         row_cells = []
 
         for col in df.columns:
             cell_value = row[col]
 
-            # Determine formatting based on data type
             if pd.api.types.is_integer_dtype(df[col]):
                 formatted_value = f"{int(cell_value):,}"
             elif pd.api.types.is_float_dtype(df[col]):
@@ -262,15 +243,12 @@ def safe_print(obj: Any, console_width=100, logger: Any | None = None) -> None:
     """Print a Rich object in a console- and logger-safe manner."""
     console = Console(force_terminal=False, color_system=None, width=console_width)
 
-    # Capture the table as a string and log it
     with console.capture() as capture:
         console.print(obj)
 
     if logger:
-        # Use the provided logger
         logger.info(f"\n{capture.get()}")
     else:
-        # Use the default ranked logger
         ranked_logger.info(f"\n{capture.get()}")
 
 

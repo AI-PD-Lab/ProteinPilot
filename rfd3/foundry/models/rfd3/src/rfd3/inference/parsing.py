@@ -18,10 +18,6 @@ from foundry.utils.components import (
     unravel_components,
 )
 
-# ============================================================================
-# Input Specification & Validation
-# ============================================================================
-
 
 class InputSelection(BaseModel):
     model_config = ConfigDict(
@@ -57,11 +53,9 @@ class InputSelection(BaseModel):
 
     @model_validator(mode="after")
     def check_keys(self):
-        # lightweight validation that all keys have contig format (are splittable indices)
         assert all([split_contig(k) for k in self.data.keys()])
         return self
 
-    # Wrapper functionality as dict-like
     def __getitem__(self, key: str) -> List[str]:
         """Allow dict-like access."""
         return self.data[key]
@@ -78,7 +72,6 @@ class InputSelection(BaseModel):
     def get(self, *args, **kwargs):
         return self.data.get(*args, **kwargs)
 
-    # Serialization & repr
     def __repr__(self) -> str:
         num_atoms = self.mask.sum() if hasattr(self.mask, "sum") else 0
         num_tokens = len(self.tokens) if self.tokens else 0
@@ -90,7 +83,6 @@ class InputSelection(BaseModel):
     def serialize_raw(self) -> Any:
         return self.raw
 
-    # Listed as separate methods for future changes to parsing.
     def get_mask(self):
         return self.mask
 
@@ -102,24 +94,19 @@ class InputSelection(BaseModel):
 def from_any_(v: Any, atom_array: AtomArray):
     data_norm = canonicalize_(v, atom_array)
 
-    # Canonicalize dictionaries to SelectionDict (I.e. convert "ALL" / "TIP" -> concrete atom names)
     data_split = {}
     mask = np.array([False] * len(atom_array))
     tokens = {}
     for idx, atm_names in data_norm.items():
-        # Find atom array subset
         comp_mask = fetch_mask_from_idx(idx, atom_array=atom_array)
         token = atom_array[comp_mask]
 
         comp_mask_subset = get_name_mask(
             token.atom_name, atm_names, token.res_name[0]
-        )  # [N_atoms_in_token,]
+        )
 
-        # Split to atom names
         data_split[idx] = token.atom_name[comp_mask_subset].tolist()
-        # TODO: there is a bug where when you select specifc atoms within a ligand, output ligand is fragmented
 
-        # Update mask & token dictionary
         mask[comp_mask] = comp_mask_subset
         tokens[idx] = token[comp_mask_subset]
 
@@ -127,11 +114,6 @@ def from_any_(v: Any, atom_array: AtomArray):
 
 
 def canonicalize_(v, atom_array: AtomArray):
-    # Canonicalize inputs to dictionaries of strings:
-    # "A11-12" -> {"A11": "N,CA,C,...", "A12": "N,CA,C,..."}
-    # True -> {"A1": "ALL", "A2": "ALL", ...}
-    # False -> {"A1": "", "A2": "", ...}
-    # "LIG" -> {"B1": "ALL", "C1": "ALL"}  (for two ligands named LIG)
     data = {}
     if isinstance(v, str):
         for component in unravel_components(
@@ -139,18 +121,16 @@ def canonicalize_(v, atom_array: AtomArray):
         ):
             if (
                 isinstance(component, str) and component[0].isalpha()
-            ):  # filter on valid chain IDs
+            ):
                 data[component] = "ALL"
 
     elif isinstance(v, bool):
         starts = get_residue_starts(atom_array, add_exclusive_stop=True)
         for start, stop in zip(starts[:-1], starts[1:]):
             token = atom_array[start:stop]
-            # All atoms selected for every token or None
             data[f"{token.chain_id[0]}{token.res_id[0]}"] = "ALL" if v else ""
 
     elif isinstance(v, dict):
-        # Ensure all values of dictionaries are strings
         data = {}
         for k, vv in v.items():
             for component in unravel_components(

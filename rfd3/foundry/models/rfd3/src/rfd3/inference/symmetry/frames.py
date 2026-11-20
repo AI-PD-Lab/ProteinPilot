@@ -12,7 +12,6 @@ def get_symmetry_frames_from_symmetry_id(symmetry_id):
     """
     from rfd3.inference.symmetry.symmetry_utils import SymmetryConfig
 
-    # Get frames from symmetry id
     sym_conf = {}
     if isinstance(symmetry_id, SymmetryConfig):
         sym_conf = symmetry_id
@@ -32,7 +31,6 @@ def get_symmetry_frames_from_symmetry_id(symmetry_id):
     else:
         raise ValueError(f"Symmetry id {symmetry_id} not supported")
 
-    # Check that the frames are valid rotation matrices
     for R, _ in frames:
         assert is_valid_rotation_matrix(R), f"Frame {R} is not a valid rotation matrix"
 
@@ -48,7 +46,6 @@ def get_symmetry_frames_from_atom_array(src_atom_array, input_frames):
     Returns:
         computed_frames: list of (rotation_matrix, translation_vector) tuples (updated)
     """
-    # import within the function to avoid circular import
     from rfd3.inference.symmetry.checks import (
         check_input_frames_match_symmetry_frames,
         check_max_rmsds,
@@ -58,10 +55,8 @@ def get_symmetry_frames_from_atom_array(src_atom_array, input_frames):
         check_valid_subunit_size,
     )
 
-    # remove non-protein elements
     src_atom_array = src_atom_array[src_atom_array.chain_type == 6]
 
-    # get entities and ids from the src atom array
     pn_unit_ent = src_atom_array.get_annotation("pn_unit_entity")
     pn_unit_id = src_atom_array.get_annotation("pn_unit_iid")
     unique_entities = np.unique(pn_unit_ent)
@@ -69,19 +64,15 @@ def get_symmetry_frames_from_atom_array(src_atom_array, input_frames):
         i: np.unique(pn_unit_id[pn_unit_ent == i]) for i in unique_entities
     }
 
-    # get coordinates
     coords = src_atom_array.coord
 
-    # get/check multiplicities of subunits
     check_valid_multiplicity(nids_by_entity)
 
     multiplicity = min([len(i) for i in nids_by_entity.values()])
     n_per_asu = {i: len(j) // multiplicity for i, j in nids_by_entity.items()}
 
-    # check that the subunits in the input are of the same size
     check_valid_subunit_size(nids_by_entity, pn_unit_id)
 
-    # align the largest set of entities
     natm_per_unique = {
         i: (pn_unit_id == nids_by_entity[i][0]).sum()
         for i in unique_entities
@@ -89,17 +80,13 @@ def get_symmetry_frames_from_atom_array(src_atom_array, input_frames):
     }
     reference_entity = max(natm_per_unique, key=natm_per_unique.get)
 
-    # check that we have enough atoms to align
     check_min_atoms_to_align(natm_per_unique, reference_entity)
 
-    # chains for the alignment (will generate complete set of frames)
     chains_to_consider = nids_by_entity[reference_entity]
     reference_molecule = nids_by_entity[reference_entity][0]
 
-    # check that we are not exceeding the max number of transforms
     check_max_transforms(chains_to_consider)
 
-    # align reference molecule to all others
     xforms = {
         i: _align(coords[pn_unit_id == i], coords[pn_unit_id == reference_molecule])
         for i in chains_to_consider
@@ -109,10 +96,8 @@ def get_symmetry_frames_from_atom_array(src_atom_array, input_frames):
         for i, j in xforms.items()
     }
 
-    # check that there is not too big of a RMSD difference between subunits
     check_max_rmsds(rmsds)
 
-    # check that the frames are valid rotation matrices
     Rs = [R for _, R, _ in xforms.values()]
     for R in Rs:
         assert is_valid_rotation_matrix(
@@ -120,7 +105,6 @@ def get_symmetry_frames_from_atom_array(src_atom_array, input_frames):
         ), f"Computed frame {R} is not a valid rotation matrix"
     computed_frames = [(R, np.array([0, 0, 0])) for R in Rs]
 
-    # check that the computed frames match the input frames
     check_input_frames_match_symmetry_frames(
         computed_frames, input_frames, nids_by_entity
     )
@@ -269,12 +253,10 @@ def get_dihedral_frames(order):
             ]
         )
 
-        # 180 degree rotation in the xy-plane
         phi = angle + np.pi / order
         u = np.array([np.cos(phi), np.sin(phi), 0])
         flip = -np.eye(3) + 2 * np.outer(u, u)
 
-        # add both frames for the dihedral
         frames.append((R, np.array([0, 0, 0])))
         frames.append((R @ flip, np.array([0, 0, 0])))
 
@@ -285,16 +267,6 @@ def get_frames_from_file(file_path):
     raise NotImplementedError("Input defined symmetry not implemented")
 
 
-###################################
-# Kinematics
-###################################
-
-
-# fd - two routines that convert between:
-#    a) a "virtual frame" consisting of three atoms; and
-#    b) a translation and rotation
-# uses Gram-Schmidt orthogonalziation, handles stacked/unstacked
-# support np and torch inputs
 def RTs_to_framecoords(Rs, ts, sig=1.0):
     if isinstance(Rs, np.ndarray):
         Rs = torch.from_numpy(Rs)
@@ -309,8 +281,6 @@ def RTs_to_framecoords(Rs, ts, sig=1.0):
     return Ori, X, Y
 
 
-# RTs_to_framecoords is used in loss and expects torch inputs
-# (and must support backwards)
 def framecoords_to_RTs(Ori, X, Y, eps=1e-6):
     R1 = X - Ori
     R1 = (R1 + torch.tensor([eps, 0, 0], device=R1.device)) / (
@@ -326,8 +296,7 @@ def framecoords_to_RTs(Ori, X, Y, eps=1e-6):
 
     R3 = torch.cross(R1, R2, dim=-1)
 
-    # Stack into rotation matrix
-    R = torch.stack([R1, R2, R3], axis=-2)  # shape (..., 3, 3)
+    R = torch.stack([R1, R2, R3], axis=-2)
     T = Ori
 
     return R, T

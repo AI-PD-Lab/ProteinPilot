@@ -100,11 +100,9 @@ class FabricTrainer(ABC):
             (3) Fabric Loggers (https://lightning.ai/docs/fabric/2.4.0/api/loggers.html)
             (4) Efficient Gradient Accumulation (https://lightning.ai/docs/fabric/2.4.0/advanced/gradient_accumulation.html)
         """
-        # DDP strategy requires a manual timeout higher than the default
         if strategy == "ddp":
             strategy = DDPStrategy(timeout=timedelta(seconds=nccl_timeout))
 
-        # See (1) for initialization arguments for Fabric()
         self.fabric = L.Fabric(
             accelerator=accelerator,
             strategy=strategy,
@@ -115,23 +113,19 @@ class FabricTrainer(ABC):
             loggers=loggers,
         )
 
-        # Training
         self.clip_grad_max_norm = clip_grad_max_norm
         self.grad_accum_steps = grad_accum_steps
         self.error_if_grad_nonfinite = error_if_grad_nonfinite
 
-        # Stopping
         self.max_epochs = max_epochs
         self.should_stop = False
         self.n_examples_per_epoch = n_examples_per_epoch
         self.limit_train_batches = limit_train_batches
         self.limit_val_batches = limit_val_batches
 
-        # Validation
         self.validate_every_n_epochs = validate_every_n_epochs
         self.prevalidate = prevalidate
 
-        # Checkpoints
         self.output_dir = Path(output_dir) if output_dir else None
         self.checkpoint_every_n_epochs = checkpoint_every_n_epochs
         self.skip_optimizer_loading = skip_optimizer_loading
@@ -151,7 +145,6 @@ class FabricTrainer(ABC):
             train_cfg: The training configuration dictionary. Used for reinitializing the trainer with the same configuration
                 (for training or for inference). Default is an empty dictionary.
         """
-        # Default values for the state
         default_state = {
             "model": None,
             "optimizer": None,
@@ -161,15 +154,12 @@ class FabricTrainer(ABC):
             "train_cfg": {},
         }
 
-        # Initialize self.state with default values if it doesn't exist
         if not hasattr(self, "state"):
             self.state = default_state.copy()
         else:
-            # Ensure existing state has all default keys
             for key, value in default_state.items():
                 self.state.setdefault(key, value)
 
-        # Merge the updates into the existing state
         self.state.update(updates)
 
     def construct_optimizer(self) -> None:
@@ -183,7 +173,6 @@ class FabricTrainer(ABC):
         ), "Model not found in state dictionary! You must call `construct_model()` before constructing the optimizer."
 
         if self.state["train_cfg"].model.optimizer:
-            # ... instantiate the optimizer
             optimizer = hydra.utils.instantiate(
                 self.state["train_cfg"].model.optimizer,
                 params=self.state["model"].parameters(),
@@ -200,7 +189,6 @@ class FabricTrainer(ABC):
             "optimizer" in self.state and self.state["optimizer"]
         ), "Optimizer not found in state dictionary! You must call `construct_optimizer()` before constructing the scheduler."
 
-        # ...  instantiate the LR scheduler(s)
         lr_scheduler = (
             hydra.utils.instantiate(
                 self.state["train_cfg"].model.lr_scheduler,
@@ -211,7 +199,6 @@ class FabricTrainer(ABC):
         )
 
         if lr_scheduler:
-            # We assume "interval = step" and "frequency = 1" for the default scheduler; custom implementations may override this method
             scheduler_cfg = SchedulerConfig(
                 scheduler=lr_scheduler,
                 interval="step",
@@ -239,13 +226,11 @@ class FabricTrainer(ABC):
         model = self.state["model"]
         optimizer = self.state["optimizer"]
 
-        # ... setup the model and optimizer
         if optimizer:
             model, optimizer = self.fabric.setup(model, optimizer)
         else:
             model = self.fabric.setup(model)
 
-        # ... update the state dictionary (we avoid updating the state dictionary in-place, which is an anti-pattern)
         self.initialize_or_update_trainer_state(
             {
                 "model": model,
@@ -274,7 +259,6 @@ class FabricTrainer(ABC):
             hasattr(self, "state") and "model" in self.state
         ), "Model not found in state dictionary! You must call `instantiate_model()` before running fit()."
 
-        # (If we don't have enough examples to sample, we will log a warning and use the smaller number)
         if len(train_loader) * self.fabric.world_size < self.n_examples_per_epoch:
             ranked_logger.warning(
                 f"Number of examples per epoch ({self.n_examples_per_epoch}) exceeds the number of examples in the loader: "
@@ -285,9 +269,7 @@ class FabricTrainer(ABC):
             self.n_examples_per_epoch / self.fabric.world_size
         )
 
-        # ... setup training and validation dataloaders with Fabric
         train_loader = self.fabric.setup_dataloaders(
-            # Our sampler is already distributed, so we don't need to wrap with a DistributedSampler
             train_loader,
             use_distributed_sampler=False,
         )
@@ -303,18 +285,14 @@ class FabricTrainer(ABC):
         if ckpt_path is not None:
             ckpt_path = Path(ckpt_path)
             if ckpt_path.is_dir():
-                # If given a directory, load the latest checkpoint from the directory
                 ranked_logger.info(
                     f"Loading latest checkpoint within the directory {ckpt_path}..."
                 )
                 self.load_checkpoint(self.get_latest_checkpoint(ckpt_path))
             else:
-                # If given a specific checkpoint file, load that checkpoint
                 self.load_checkpoint(ckpt_path)
 
-            # Increment the global epoch (e.g., if we loaded a checkpoint from [the end of] epoch 5, we should start training at epoch 6)
             self.state["current_epoch"] += 1
-            # Stopping conditions
             if (
                 self.max_epochs is not None
                 and self.state["current_epoch"] >= self.max_epochs
@@ -323,17 +301,12 @@ class FabricTrainer(ABC):
         else:
             ranked_logger.info("No checkpoint provided; training from scratch.")
 
-        # Set the _num_iter_calls internal attribute of the wrapped loader to the current epoch
-        # (NOTE: This addresses a bug in Lightning Fabric, where there the iter() method calls the `_set_sampler_epoch()` method,
-        # relying on the _num_iter_calls attribute to determine the current epoch)
         train_loader._num_iter_calls = self.state["current_epoch"]
 
         self.fabric.call("on_fit_start", trainer=self, model=self.state["model"])
 
-        # Prevalidate
         if self.prevalidate and val_loaders:
-            # Temporarily decrement the current epoch, since we haven't done any training this epoch
-            self.state["current_epoch"] -= 1  # (Will be -1 if training from scratch)
+            self.state["current_epoch"] -= 1
             ranked_logger.info(
                 f"Prevalidating with epoch {self.state['current_epoch']} before training; to avoid this behavior, set `prevalidate=False` in the Trainer config."
             )
@@ -341,10 +314,9 @@ class FabricTrainer(ABC):
                 val_loaders=val_loaders,
                 limit_batches=self.limit_val_batches,
             )
-            self.state["current_epoch"] += 1  # (Restore the current epoch)
+            self.state["current_epoch"] += 1
 
         while not self.should_stop:
-            # ... train for one epoch
             ranked_logger.info(
                 f"\n+ Starting epoch {self.state['current_epoch']}/{self.max_epochs - 1}\n"
                 f"+ Total examples per epoch (across all GPU): {self.n_examples_per_epoch}\n"
@@ -360,7 +332,6 @@ class FabricTrainer(ABC):
 
             ranked_logger.info(f"Finished epoch {self.state['current_epoch']}!")
 
-            # ... validate, if we're at the validation interval
             if self.should_validate and val_loaders:
                 ranked_logger.info(
                     f"Starting validation for epoch {self.state['current_epoch']}!"
@@ -370,26 +341,21 @@ class FabricTrainer(ABC):
                     limit_batches=self.limit_val_batches,
                 )
 
-            # ... step the scheduler, if we're adjusting the learning rate at the epoch-level
             self.step_scheduler(
                 level="epoch", current_value=self.state["current_epoch"]
             )
 
-            # ... save checkpoint, if we've reached the checkpoint interval
             if self.state["current_epoch"] % self.checkpoint_every_n_epochs == 0:
                 self.save_checkpoint()
 
-            # ... increment the epoch
             self.state["current_epoch"] += 1
 
-            # Stopping conditions
             if (
                 self.max_epochs is not None
                 and self.state["current_epoch"] >= self.max_epochs
             ):
                 self.should_stop = True
 
-        # Reset for next `fit()` call
         self.should_stop = False
 
         self.fabric.call("on_fit_end", trainer=self)
@@ -411,7 +377,6 @@ class FabricTrainer(ABC):
 
         assert self.state["model"].training
 
-        # NOTE: When we call iter(), Fabric calls the `set_sampler_epoch()` method on the sampler behind the scenes, so we don't need to call it explicitly
         train_iter = iter(train_loader)
         self.fabric.call("on_after_train_loader_iter", trainer=self)
 
@@ -419,7 +384,6 @@ class FabricTrainer(ABC):
         t_trains = []
         t_step_end = time.time()
         for batch_idx in range(len(train_loader)):
-            # (End epoch if stopping training completely or maximum desired batches for this epoch reached)
             if self.should_stop or batch_idx >= limit_batches:
                 break
 
@@ -428,7 +392,6 @@ class FabricTrainer(ABC):
             self.fabric.call(
                 "on_train_batch_start", batch=batch, batch_idx=batch_idx, trainer=self
             )
-            # Optimizer should step if we've accumulated the desired number of gradients
             should_optimizer_step = (batch_idx + 1) % self.grad_accum_steps == 0
 
             t_step_start = time.time()
@@ -449,10 +412,6 @@ class FabricTrainer(ABC):
                     f"Training step took {t_train:.3f} seconds, dataloader took {t_dataloader:.3f} seconds. "
                     "This may indicate a performance issue with the data loading or training step."
                 )
-                # Uncomment these lines to dump the slow example to disk for debugging
-                # fout = f"local/debug/batch_{batch_idx}_slow_example.pt"
-                # ranked_logger.info("Dumping batch example to disk: {}".format(fout))
-                # torch.save(batch, fout)
 
             if batch_idx % 100 == 0:
                 logger.info(
@@ -473,7 +432,6 @@ class FabricTrainer(ABC):
                     trainer=self,
                 )
 
-                # ... step the optimizer, clipping gradients and updating EMA parameters if applicable
                 self.step_optimizer()
 
                 self.fabric.call(
@@ -489,13 +447,10 @@ class FabricTrainer(ABC):
             )
 
             if should_optimizer_step:
-                # ... step the scheduler, if we're adjusting the learning rate at the optimizer step-level
                 self.step_scheduler(
                     level="step", current_value=self.state["global_step"]
                 )
 
-            # ... increment the global step, if optimizer stepped
-            # NOTE: Each node maintains its own global step
             self.state["global_step"] += int(should_optimizer_step)
 
         self.fabric.call("on_train_epoch_end", trainer=self)
@@ -513,16 +468,13 @@ class FabricTrainer(ABC):
             limit_batches: Limit on the batches during this validation epoch. If greater than the number of batches in the
                 `val_loader`, this argument has no effect. Helpful for debugging; should NOT be used for production.
         """
-        # ... set model to evaluation mode
         self.state["model"].eval()
 
         with torch.no_grad():
-            # ... assert we're in evaluation mode
             assert not self.state["model"].training
 
             self.fabric.call("on_validation_epoch_start", trainer=self)
 
-            # ... iterate over all validation loaders
             for val_loader_name, val_loader in val_loaders.items():
                 if (
                     hasattr(val_loader, "eval_every_n")
@@ -539,7 +491,6 @@ class FabricTrainer(ABC):
                     )
 
                 for batch_idx, batch in enumerate(val_loader):
-                    # ... end validation epoch if stopping training completely or maximum desired batches for this epoch reached
                     if self.should_stop or batch_idx >= limit_batches:
                         break
 
@@ -569,7 +520,6 @@ class FabricTrainer(ABC):
 
             self.fabric.call("on_validation_epoch_end", trainer=self)
 
-            # ... reset the model to training mode
             self.state["model"].train()
 
     @abstractmethod
@@ -631,13 +581,11 @@ class FabricTrainer(ABC):
 
         self.load_checkpoint(ckpt_path)
 
-        # Setup validation dataloaders with Fabric
         for key, loader in val_loaders.items():
             val_loaders[key] = self.fabric.setup_dataloaders(
                 loader, use_distributed_sampler=False
             )
 
-        # Run the validation loop
         self.state["model"].eval()
         self.validation_loop(
             val_loaders=val_loaders, limit_batches=self.limit_val_batches
@@ -664,28 +612,24 @@ class FabricTrainer(ABC):
         optimizer = self.state["optimizer"]
         model = self.state["model"]
 
-        # ... clip gradients, if applicable
         if self.clip_grad_max_norm is not None:
             self.fabric.clip_gradients(
                 module=model,
                 optimizer=optimizer,
                 max_norm=self.clip_grad_max_norm,
-                error_if_nonfinite=self.error_if_grad_nonfinite,  ## Ultimately, should find the root cause of nonfinite gradients!
+                error_if_nonfinite=self.error_if_grad_nonfinite,
             )
 
-        # ... step the optimizer
         optimizer.step()
 
-        # ... zero gradients
         optimizer.zero_grad()
 
-        # ... update EMA parameters, if applicable
         if hasattr(model, "update"):
             model.update()
 
     def step_scheduler(
         self,
-        level,  #: Literal["epoch", "step"],
+        level,
         current_value: int,
     ):
         """Step the learning rate scheduler.
@@ -694,21 +638,17 @@ class FabricTrainer(ABC):
             level: The level at which to step the scheduler. Either "epoch" or "step".
             current_value: The current epoch or step value.
         """
-        # (No scheduler)
         if "scheduler_cfg" not in self.state or self.state["scheduler_cfg"] is None:
             return
         else:
             scheduler_cfg = self.state["scheduler_cfg"]
 
-        # (Wrong interval; e.g., we adjust learning rate every epoch, but we are stepping at the step level)
         if scheduler_cfg.interval != level:
             return
 
-        # (Right interval, but wrong frequency)
         if current_value % cast(int, scheduler_cfg.frequency) != 0:
             return
 
-        # ... step the scheduler
         scheduler_cfg.scheduler.step()
 
     def save_checkpoint(self) -> None:
@@ -716,22 +656,18 @@ class FabricTrainer(ABC):
 
         If no output directory is specified, then no checkpoint is saved.
         """
-        # No checkpoint directory; skip saving
         if not self.output_dir:
             ranked_logger.warning(
                 "No output directory specified; skipping model checkpointing of state dictionary."
             )
             return
 
-        # (Provide a hook to modify the state before saving)
         self.fabric.call("on_save_checkpoint", state=self.state, trainer=self)
 
-        # ... construct the checkpoint file path using Path
         checkpoint_file = (
             self.output_dir / "ckpt" / f"epoch-{self.state['current_epoch']:04d}.ckpt"
         )
 
-        # NOTE: Fabric's `save()` will call the `state_dict()` method on the model, optimizer, and scheduler_cfg
         self.fabric.save(checkpoint_file, self.state)
         ranked_logger.info(f"Saved checkpoint to: {checkpoint_file}")
 
@@ -763,7 +699,7 @@ class FabricTrainer(ABC):
             valid_state_dict = {}
             for key, ckpt_tensor in ckpt_dict.items():
                 if key not in current_dict:
-                    continue  # Let strict=False handle missing keys
+                    continue
 
                 if ckpt_tensor.size() != current_dict[key].size():
                     ranked_logger.warning(
@@ -777,7 +713,6 @@ class FabricTrainer(ABC):
 
             return valid_state_dict
 
-        # ... load the model, subsetting to parameters with matching sizes
         model = self.state["model"]
         model.load_state_dict(
             _subset_state_dict_to_valid_params(model.state_dict(), ckpt["model"]),
@@ -788,19 +723,15 @@ class FabricTrainer(ABC):
         self, ckpt_path: Path | str, is_inference: bool = False
     ) -> None:
         """Loads a checkpoint from the specified path."""
-        # ... load the checkpoint (replaces the state dictionary in-place)
         ranked_logger.info(f"Loading checkpoint from: {ckpt_path}...")
         ckpt = self.fabric.load(ckpt_path)
 
         try:
-            # ... optimize, scheduler, model
             if not is_inference:
                 self._load_optimizer(ckpt)
                 self._load_scheduler(ckpt)
             self._load_model(ckpt)
 
-            # ... stateless keys
-            # (We do not want to load the `train_cfg` in this instance, as it may contain different configurations)
             keys_to_ignore = {"model", "optimizer", "scheduler_cfg", "train_cfg"}
             self.state.update(
                 {
@@ -810,7 +741,6 @@ class FabricTrainer(ABC):
                 }
             )
 
-            # Log warnings for missing and extra keys
             state_keys = set(self.state) - keys_to_ignore
             ckpt_keys = set(ckpt) - keys_to_ignore
 
@@ -833,13 +763,11 @@ class FabricTrainer(ABC):
             self.load_legacy_checkpoint(ckpt)
 
     def load_legacy_checkpoint(self, ckpt: dict) -> dict:
-        # TODO: Remove when no longer needed
         """Backwards-compatibility function to checkpoints with legacy state formats"""
         new_model_state = {}
         prefixes = {key.split(".")[0] for key in ckpt["final_state_dict"].keys()}
 
         if "model" not in prefixes:
-            # (Model-only checkpoints from training, without confidence head)
             model_state_dict = {
                 f"model.{k}": v for k, v in ckpt["final_state_dict"].items()
             }
@@ -849,10 +777,8 @@ class FabricTrainer(ABC):
             full_state_dict = {**model_state_dict, **shadow_state_dict}
 
         elif "confidence" in prefixes:
-            # (Checkpoints with confidence head)
             ranked_logger.info("Detected confidence module in checkpoint...")
 
-            # ... replace confidence head keys with model and shadow prefixes
             model_state_dict = {
                 f"model.confidence_head{key[len('confidence') :]}"
                 if key.startswith("confidence")
@@ -874,7 +800,6 @@ class FabricTrainer(ABC):
         else:
             raise ValueError("Unknown checkpoint format")
 
-        # ... check shapes (we only load matching shapes to support fine-tuning or adding channels)
         state_dict = self.state["model"].state_dict()
         for param in state_dict:
             if param not in full_state_dict:
@@ -886,7 +811,6 @@ class FabricTrainer(ABC):
                     f"wrong size: {param} {full_state_dict[param].shape} {state_dict[param].shape}"
                 )
 
-        # ... update the state
         self.state["model"].load_state_dict(new_model_state, strict=False)
         self.state["current_epoch"] = ckpt["epoch"]
 
@@ -911,10 +835,8 @@ class FabricTrainer(ABC):
         if not ckpt_load_dir.is_dir():
             return None
 
-        # List all files in the directory and sort them
         items = sorted(ckpt_load_dir.iterdir())
 
-        # Return the last item in the sorted list, if any
         return items[-1] if items else None
 
     @property

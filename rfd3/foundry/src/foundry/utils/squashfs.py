@@ -59,21 +59,17 @@ class SquashfsManager:
         """
         sqfs_file = str(Path(sqfs_file).resolve())
 
-        # Check file exists
         if not os.path.exists(sqfs_file):
             raise FileNotFoundError(f"Squashfs file not found: {sqfs_file}")
 
         with cls._lock:
-            # Register cleanup on first use
             if not cls._cleanup_registered:
                 atexit.register(cls._cleanup_on_exit)
                 cls._cleanup_registered = True
 
-            # Return cached mount if exists
             if sqfs_file in cls._mounts:
                 return cls._mounts[sqfs_file]
 
-            # Mount and cache
             mount_dir = cls._mount(sqfs_file)
             cls._mounts[sqfs_file] = mount_dir
             logger.info(f"Mounted {sqfs_file} at {mount_dir}")
@@ -101,7 +97,6 @@ class SquashfsManager:
             )
             return mount_dir
         except subprocess.CalledProcessError as e:
-            # Cleanup failed mount directory
             try:
                 os.rmdir(mount_dir)
             except OSError:

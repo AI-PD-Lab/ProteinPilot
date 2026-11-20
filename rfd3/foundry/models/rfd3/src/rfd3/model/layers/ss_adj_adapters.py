@@ -14,11 +14,10 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 
-# SS label indices (must match foundry/data/ss_adj.py constants)
 _SS_HELIX = 0
 _SS_STRAND = 1
 _SS_LOOP = 2
-_SS_MASKED = 3  # dropout sentinel — never in stored files, only runtime
+_SS_MASKED = 3
 
 
 class SSAdapter(nn.Module):
@@ -48,11 +47,9 @@ class SSAdapter(nn.Module):
         Returns:
             [I, c_s] float — zero for masked positions (label==3)
         """
-        # Clamp to valid range before lookup to avoid OOB (masked=3 is valid, 4+ is not)
         safe_labels = ss_labels.clamp(0, 3)
-        out = self.embed(safe_labels)  # [I, c_s]
-        # Zero out masked positions regardless of embedding weight values
-        not_masked = (ss_labels != _SS_MASKED).float().unsqueeze(-1)  # [I, 1]
+        out = self.embed(safe_labels)
+        not_masked = (ss_labels != _SS_MASKED).float().unsqueeze(-1)
         return out * not_masked
 
 

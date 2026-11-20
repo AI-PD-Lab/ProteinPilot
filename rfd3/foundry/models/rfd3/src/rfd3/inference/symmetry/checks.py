@@ -9,7 +9,7 @@ from foundry.utils.ddp import RankedLogger
 
 MIN_ATOMS_ALIGN = 30
 MAX_TRANSFORMS = 10
-RMSD_CUT = 1.0  # Angstroms
+RMSD_CUT = 1.0
 
 ranked_logger = RankedLogger(__name__, rank_zero_only=True)
 
@@ -22,7 +22,6 @@ def check_symmetry_config(
     """
 
     assert sym_conf.id, "symmetry_id is required. e.g. {'id': 'C2'}"
-    # if unsym motif is provided, check that each motif name is in the atom array
 
     is_motif_atom = get_motif_features(atom_array)["is_motif_atom"]
     is_unsym_motif = np.zeros(atom_array.shape[0], dtype=bool)
@@ -77,7 +76,6 @@ def check_atom_array_is_symmetric(atom_array):
         get_symmetry_frames_from_symmetry_id,
     )
 
-    # remove hetero atoms
     atom_array = atom_array[~atom_array.hetero]
     if len(atom_array) == 0:
         ranked_logger.warning(
@@ -89,7 +87,6 @@ def check_atom_array_is_symmetric(atom_array):
     asu_mask = atom_array.chain_id == chains[0]
     asu_atoms = atom_array[asu_mask].copy()
 
-    # Check that all atom arrays have the same number of atoms
     for chain in chains[1:]:
         chain_mask = atom_array.chain_id == chain
         if len(asu_atoms) != len(atom_array[chain_mask]):
@@ -98,7 +95,6 @@ def check_atom_array_is_symmetric(atom_array):
             )
             return False
 
-    # Check that all atom arrays have the same atoms
     for chain in chains[1:]:
         chain_mask = atom_array.chain_id == chain
         for i in range(len(asu_atoms)):
@@ -108,7 +104,6 @@ def check_atom_array_is_symmetric(atom_array):
                 )
                 return False
 
-    # Check that the atom array aligns with the standard symmetry frames
     standard_frames = get_symmetry_frames_from_symmetry_id(atom_array.symmetry_id[0])
     standard_atom_array = []
     for frame in standard_frames:
@@ -146,26 +141,22 @@ def find_optimal_rotation(coords1, coords2, max_points=1000):
         coords1 = coords1[indices]
         coords2 = coords2[indices]
 
-    # Ensure same number of points
     min_len = min(len(coords1), len(coords2))
     coords1 = coords1[:min_len]
     coords2 = coords2[:min_len]
     if min_len < 3:
         return None
 
-    # Kabsch algorithm
     try:
         centroid1 = np.mean(coords1, axis=0)
         centroid2 = np.mean(coords2, axis=0)
         coords1_centered = coords1 - centroid1
         coords2_centered = coords2 - centroid2
 
-        # Compute covariance matrix
         H = coords1_centered.T @ coords2_centered
 
         U, S, Vt = np.linalg.svd(H)
         R = Vt.T @ U.T
-        # Ensure proper rotation matrix
         if np.linalg.det(R) < 0:
             Vt[-1, :] *= -1
             R = Vt.T @ U.T
@@ -200,15 +191,13 @@ def check_valid_multiplicity(nids_by_entity) -> None:
     Arguments:
         nids_by_entity: dict mapping entity to ids
     """
-    # get multiplicities of subunits
     multiplicity = min([len(i) for i in nids_by_entity.values()])
-    if multiplicity == 1:  # no possible symmetry
+    if multiplicity == 1:
         raise ValueError(
             "Input has no possible symmetry. If asymmetric motif, please use 2D conditioning inference instead.\n"
             "Multiplicity: 1"
         )
 
-    # Check that the input is not asymmetric
     multiplicity_good = [len(i) % multiplicity == 0 for i in nids_by_entity.values()]
     if not all(multiplicity_good):
         raise ValueError(
@@ -271,4 +260,3 @@ def check_max_rmsds(rmsds) -> None:
         ranked_logger.warning(
             f"RMSD between the reference molecule and the other molecules is too big ({max(rmsds.values())} > {RMSD_CUT}). Please provide a symmetric input PDB file."
         )
-        # raise ValueError(f"RMSD between the reference molecule and the other molecules is too big ({max(rmsds.values())} > {RMSD_CUT}). Please provide a symmetric input PDB file.")

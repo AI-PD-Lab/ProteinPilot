@@ -37,7 +37,6 @@ def dump_structures(
         assert (
             isinstance(atom_arrays, AtomArrayStack) or isinstance(atom_arrays, list)
         ), "AtomArrayStack or list of AtomArray required when one_model_per_file is True"
-        # One model per file —> loop over the diffusion batch
         for i in range(len(atom_arrays)):
             path = f"{base_path}_model_{i}"
             to_cif_file(
@@ -49,7 +48,6 @@ def dump_structures(
                 **kwargs,
             )
     else:
-        # Include all models in a single CIF file
         to_cif_file(
             atom_arrays,
             base_path,
@@ -75,13 +73,11 @@ def dump_metadata(
         one_model_per_file (bool): If True, save each model's metadata in a separate file.
     """
     if one_model_per_file:
-        # One model per file —> loop over the diffusion batch
         for i in prediction_metadata:
             path = f"{base_path}_model_{i}"
             with open(f"{path}.json", "w") as f:
                 json.dump(prediction_metadata[i], f, indent=4)
     else:
-        # Include all models in a single JSON file
         with open(f"{base_path}.json", "w") as f:
             json.dump(prediction_metadata, f, indent=4)
 
@@ -108,7 +104,6 @@ def dump_trajectories(
     n_steps = len(trajectory_list)
 
     if align_structures:
-        # ... align the trajectories on the last prediction
         w_L = torch.ones(*trajectory_list[0].shape[:2]).to(trajectory_list[0].device)
         X_exists_L = torch.ones(trajectory_list[0].shape[1], dtype=torch.bool).to(
             trajectory_list[0].device
@@ -121,17 +116,13 @@ def dump_trajectories(
                 w_L=w_L,
             )
 
-    # ... invert the list, to make the trajectory compatible with PyMol (which builds the bond graph from the first frame)
     trajectory_list = trajectory_list[::-1]
 
-    # ... Select subset of frames if necessary
     if n_steps > max_frames:
         selected_indices = torch.linspace(0, n_steps - 1, max_frames).long().tolist()
         trajectory_list = [trajectory_list[i] for i in selected_indices]
         n_steps = len(trajectory_list)
 
-    # ... iterate over the range of D (diffusion batch size; e.g., 5 during validation)
-    # (We want to convert `aligned_trajectory_list` to a list of length D where each item is a tensor of shape [n_steps, L, 3])
     trajectories_split_by_model = []
     for d in range(trajectory_list[0].shape[0]):
         trajectory_for_single_model = torch.stack(
@@ -139,7 +130,6 @@ def dump_trajectories(
         )
         trajectories_split_by_model.append(trajectory_for_single_model)
 
-    #  ... write the trajectories to CIF files, named by epoch, dataset, example_id, and model index (within the diffusion batch)
     for i, trajectory in enumerate(trajectories_split_by_model):
         if isinstance(trajectory, torch.Tensor):
             trajectory = trajectory.cpu().numpy()
@@ -172,15 +162,11 @@ def build_stack_from_atom_array_and_batched_coords(
         coords.shape[-2] == atom_array.array_length()
     ), f"N batched coordinates {coords.shape} != {atom_array.array_length()}"
 
-    # (Diffusion batch size will become the number of models)
     n_batch = coords.shape[0]
 
-    # Build the stack and assign the coordinates
     atom_array_stack = stack([atom_array for _ in range(n_batch)])
     atom_array_stack.coord = coords
 
-    # Adjust chain_id if there are multiple transformations
-    # (Otherwise, we will have ambiguous bond annotations, since only `chain_id` is used for the bond annotations)
     if (
         "transformation_id" in atom_array.get_annotation_categories()
         and len(np.unique(atom_array_stack.transformation_id)) > 1
@@ -206,13 +192,10 @@ def find_files_with_extension(path: PathLike, supported_file_types: list) -> lis
     files_with_supported_types = []
     path = Path(path)
 
-    # Check if the path is a directory
     if path.is_dir():
-        # Search for files with each supported extension
         for file_type in supported_file_types:
             files_with_supported_types.extend(path.glob(f"*{file_type}"))
     elif path.is_file() and path.suffix in supported_file_types:
-        # If it's a file and has a supported extension, add to the list
         files_with_supported_types.append(path)
 
     return files_with_supported_types
@@ -232,7 +215,6 @@ def create_example_id_extractor(extensions: set | list = CIF_LIKE_EXTENSIONS) ->
 
     def extract_id(file_path: PathLike) -> str:
         """Extract example_id from file path."""
-        # Remove extension and get last part after splitting by dots
         without_ext = pattern.sub("", Path(file_path).name)
         return without_ext.split(".")[-1]
 

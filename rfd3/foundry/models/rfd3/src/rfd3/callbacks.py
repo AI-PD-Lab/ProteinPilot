@@ -10,7 +10,6 @@ ranked_logger = RankedLogger(__name__, rank_zero_only=True)
 
 class LogDesignValidationMetricsCallback(BaseCallback):
     def on_validation_epoch_end(self, trainer: Any):
-        # Only log metrics to disk if this is the global zero rank
         if not trainer.fabric.is_global_zero:
             return
 
@@ -19,7 +18,6 @@ class LogDesignValidationMetricsCallback(BaseCallback):
         ), "Results path not found! Ensure that StoreValidationMetricsInDFCallback is called first."
         df = pd.read_csv(trainer.validation_results_path)
 
-        # ... filter to most recent epoch, drop epoch column
         df = df[df["epoch"] == df["epoch"].max()]
         df.drop(columns=["epoch"], inplace=True)
 
@@ -36,11 +34,9 @@ class LogDesignValidationMetricsCallback(BaseCallback):
             remaining_df = remaining_df.dropna(how="all")
             numeric_cols = remaining_df.select_dtypes(include="number").columns
 
-            # Compute means and non-NaN counts for numeric columns
             final_means = remaining_df[numeric_cols].mean()
             non_nan_counts = remaining_df[numeric_cols].count()
 
-            # Convert the Series to a DataFrame and add the count as a new column
             final_means_df = final_means.to_frame(name="mean")
             final_means_df["Count"] = non_nan_counts
 

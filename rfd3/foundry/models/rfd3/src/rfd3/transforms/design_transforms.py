@@ -46,15 +46,10 @@ from rfd3.transforms.util_transforms import (
 )
 from rfd3.transforms.virtual_atoms import PadTokensWithVirtualAtoms
 
-from foundry.utils.ddp import RankedLogger  # noqa
+from foundry.utils.ddp import RankedLogger
 
-#####################################################################################################
-# Other design transforms
-#####################################################################################################
 
 ranked_logger = RankedLogger(__name__, rank_zero_only=True)
-
-
 
 
 def _token_backbone_indices(atom_array) -> tuple["np.ndarray", "np.ndarray"]:
@@ -128,7 +123,6 @@ class SubsampleToTypes(Transform):
     def forward(self, data):
         atom_array = data["atom_array"]
 
-        # ... Subsampling
         if not self.allowed_types == "ALL":
             is_allowed = np.zeros_like(atom_array.is_protein, dtype=bool)
             for allowed_type in self.allowed_types:
@@ -140,7 +134,6 @@ class SubsampleToTypes(Transform):
                 )
             atom_array = atom_array[is_allowed]
 
-        # ... Assert any protein remains
         if atom_array.array_length() == 0:
             raise ValueError(
                 "No tokens found in the atom array! Example ID: {}".format(
@@ -215,21 +208,14 @@ class CreateDesignReferenceFeatures(Transform):
         token_level_array = atom_array[token_starts]
         L = token_level_array.array_length()
 
-        # ... Set up default reference features
         ref_pos = np.zeros_like(atom_array.coord, dtype=np.float32)
         ref_pos[~atom_array.is_motif_atom_with_fixed_coord, :] = 0
         ref_mask = np.zeros((I,), dtype=bool)
         ref_charge = np.zeros((I,), dtype=np.int8)
         ref_pos_is_ground_truth = np.zeros((I,), dtype=bool)
 
-        # ... For elements provide only the elements for unindexed components
         ref_element = np.zeros((I,), dtype=np.int64)
-        # if self.provide_elements_for_unindexed_components:
-        #    ref_element[atom_array.is_motif_atom_unindexed] = atom_array.atomic_number[
-        #        atom_array.is_motif_atom_unindexed
-        #    ]
 
-        # ... For atom names, provide all (spoofed) names in the atom array
         ref_atom_name_chars = _encode_atom_names_like_af3(atom_array.atom_name)
         _res_start_ends = get_residue_starts(atom_array, add_exclusive_stop=True)
         _res_starts, _res_ends = _res_start_ends[:-1], _res_start_ends[1:]
@@ -241,7 +227,6 @@ class CreateDesignReferenceFeatures(Transform):
         is_motif_atom, is_motif_token = o["is_motif_atom"], o["is_motif_token"]
         is_motif_token = is_motif_token[token_starts]
 
-        # ... Add a flag for atoms with zero occupancy
         has_zero_occupancy = atom_array.occupancy == 0.0
         if data["is_inference"] and has_zero_occupancy.any():
             ranked_logger.warning(
@@ -249,36 +234,28 @@ class CreateDesignReferenceFeatures(Transform):
             )
             has_zero_occupancy = np.full_like(has_zero_occupancy, False)
 
-        # ... Token features for token type;
-        # [1, 0, 0]: non-motif
-        # [0, 1, 0]: indexed motif
-        # [0, 0, 1]: unindexed motif
         is_motif_token_unindexed = atom_array.is_motif_atom_unindexed[token_starts]
         motif_token_class = np.zeros((L,), dtype=np.int8)
         motif_token_class[is_motif_token] = 1
         motif_token_class[is_motif_token_unindexed] = 2
         motif_token_type = np.eye(3, dtype=np.int8)[
             motif_token_class
-        ]  # one-hot, (L, 3)
+        ]
 
-        # ... Provide GT as reference coordinates even when unfixed
         motif_pos = np.nan_to_num(atom_array.coord.copy())
         motif_pos = motif_pos * (is_motif_atom[..., None])
 
-        # ... Create reference features for unmasked subset (where we are allowed to use gt)
         has_sequence = (
             atom_array.is_motif_atom_with_fixed_seq
             & ~atom_array.is_motif_atom_unindexed
-        )  # (n_atoms,)
+        )
 
         if self.generate_conformers_for_non_protein_only:
             has_sequence = has_sequence & ~atom_array.is_protein
 
         if np.any(has_sequence):
-            # Subset atom level
             atom_array_unmasked = atom_array[has_sequence]
 
-            # We always want to generate conformers if there are ligand atoms that are diffused
             if (
                 self.generate_conformers
                 or np.logical_and(
@@ -293,8 +270,6 @@ class CreateDesignReferenceFeatures(Transform):
                     ),
                 )
 
-                # Compute the reference features
-                # ... Create a copy of atom_array_unmasked and replace the atom_names with gt_atom_names for reference conformer generation
                 atom_array_unmasked_with_gt_atom_name = atom_array_unmasked.copy()
                 atom_array_unmasked_with_gt_atom_name.atom_name = (
                     atom_array_unmasked_with_gt_atom_name.gt_atom_name
@@ -305,7 +280,7 @@ class CreateDesignReferenceFeatures(Transform):
                     if "cached_residue_level_data" in data
                     else None,
                     **self.conformer_generation_kwargs,
-                )[0]  ## returns tuple, need to index 0
+                )[0]
 
                 ref_atom_name_chars[has_sequence] = reference_features_unmasked[
                     "ref_atom_name_chars"
@@ -317,11 +292,9 @@ class CreateDesignReferenceFeatures(Transform):
                     "ref_pos_is_ground_truth"
                 ]
 
-                # If requested, include the reference conformers for unmasked atoms
                 if self.provide_reference_conformer_when_unmasked:
                     ref_pos[has_sequence] = reference_features_unmasked["ref_pos"]
             else:
-                # Generate simple features
                 ref_charge[has_sequence] = atom_array_unmasked.charge
                 ref_element[has_sequence] = (
                     atom_array_unmasked.atomic_number
@@ -332,54 +305,20 @@ class CreateDesignReferenceFeatures(Transform):
                 )
 
         reference_features = {
-            "ref_atom_name_chars": ref_atom_name_chars,  # (n_atoms, 4)
-            "ref_pos": ref_pos,  # (n_atoms, 3)
-            "ref_mask": ref_mask,  # (n_atoms)
-            "ref_element": ref_element,  # (n_atoms)
-            "ref_charge": ref_charge,  # (n_atoms)
-            "ref_space_uid": ref_space_uid,  # (n_atoms)
-            "ref_pos_is_ground_truth": ref_pos_is_ground_truth,  # (n_atoms)
-            "has_zero_occupancy": has_zero_occupancy,  # (n_atoms)
-            # Conditional masks
-            # "ref_is_motif_atom": is_motif_atom,  # (n_atoms, 2)
-            # "ref_is_motif_atom_mask": atom_array.is_motif_atom.copy(),  # (n_atoms)
-            # "ref_is_motif_token": is_motif_token,  # (n_tokens, 2)
-            # "ref_motif_atom_type": motif_atom_type,  # (n_atoms, 3)  # 3 types of atom conditions
-            "ref_is_motif_atom_with_fixed_coord": atom_array.is_motif_atom_with_fixed_coord.copy(),  # (n_atoms)
+            "ref_atom_name_chars": ref_atom_name_chars,
+            "ref_pos": ref_pos,
+            "ref_mask": ref_mask,
+            "ref_element": ref_element,
+            "ref_charge": ref_charge,
+            "ref_space_uid": ref_space_uid,
+            "ref_pos_is_ground_truth": ref_pos_is_ground_truth,
+            "has_zero_occupancy": has_zero_occupancy,
+            "ref_is_motif_atom_with_fixed_coord": atom_array.is_motif_atom_with_fixed_coord.copy(),
             "ref_is_motif_atom_unindexed": atom_array.is_motif_atom_unindexed.copy(),
-            "ref_motif_token_type": motif_token_type,  # (n_tokens, 3)  # 3 types of token
-            "motif_pos": motif_pos,  # (n_atoms, 3)  # GT pos for motif atoms
+            "ref_motif_token_type": motif_token_type,
+            "motif_pos": motif_pos,
         }
 
-        # TEMPORARY HACK TO CREATE MOTIF FEATURES AGAIN
-        # f = get_motif_features(atom_array)
-        # token_starts = get_token_starts(atom_array)
-        # # Annots
-        # atom_array = data["atom_array"]
-        # atom_array.set_annotation("is_motif_atom", f["is_motif_atom"])
-        # atom_array.set_annotation("is_motif_token", f["is_motif_token"])
-        # data["atom_array"] = atom_array
-        # # Ref feats
-        # motif_atom_class = np.zeros((I,), dtype=np.int8)
-        # motif_atom_class[atom_array.is_motif_atom] = 1
-        # motif_atom_class[atom_array.is_motif_atom_unindexed] = 2
-        # motif_atom_type = np.eye(3, dtype=np.int8)[motif_atom_class]  # one-hot, (I, 3)
-        # is_motif_atom = torch.nn.functional.one_hot(
-        #     torch.from_numpy(atom_array.is_motif_atom).long(), num_classes=2
-        # ).numpy()
-        # is_motif_token = torch.nn.functional.one_hot(
-        #     torch.from_numpy(atom_array.is_motif_token[token_starts]).long(),
-        #     num_classes=2,
-        # ).numpy()
-        # reference_features["ref_motif_atom_type"] = motif_atom_type
-        # reference_features["ref_is_motif_atom"] = is_motif_atom
-        # reference_features["ref_is_motif_atom_mask"] = atom_array.is_motif_atom.copy()
-        # reference_features["ref_is_motif_token"] = is_motif_token
-        # reference_features["is_motif_atom"] = atom_array.is_motif_atom.astype(
-        #     bool
-        # ).copy()
-        # reference_features["is_motif_token"] = f["is_motif_token"][token_starts]
-        # # END TEMPORARY HACK
 
         if "feats" not in data:
             data["feats"] = {}
@@ -418,7 +357,7 @@ class FeaturizeAtoms(Transform):
         ).numpy()
         data["feats"]["ref_atomwise_rasa"] = rasa_oh[
             ..., :-1
-        ]  # exclude last bin from being fed to the model
+        ]
 
         if "active_donor" in atom_array.get_annotation_categories():
             data["feats"]["active_donor"] = torch.tensor(
@@ -438,20 +377,17 @@ class FeaturizeAtoms(Transform):
                 np.zeros(len(atom_array))
             ).long()
 
-        # ss_ratio: global token-level scalar for Fourier conditioning.
-        # All atoms in a token carry the same value (set by AddGlobalIsNonLoopyFeature),
-        # so we just read one value per token via token_starts.
         if "ss_ratio" in atom_array.get_annotation_categories():
             token_starts = get_token_starts(atom_array)
             ss_vals = torch.tensor(
                 atom_array.ss_ratio[token_starts], dtype=torch.float32
-            ).unsqueeze(1)                          # [I, 1]
+            ).unsqueeze(1)
             data["feats"]["ss_ratio"] = ss_vals
         else:
             n_tokens = len(np.unique(atom_array.token_id))
             data["feats"]["ss_ratio"] = torch.full(
                 (n_tokens, 1), -1.0, dtype=torch.float32
-            )                                       # [I, 1]  unconditional sentinel
+            )
 
         return data
 
@@ -503,7 +439,6 @@ class AddIsXFeats(Transform):
         )
         _token_rep_idxs = np.where(_token_rep_mask)[0]
 
-        # ... Basic features
         if "is_backbone" in self.X:
             is_backbone = data["atom_array"].get_annotation("is_backbone")
             data["feats"]["is_backbone"] = torch.from_numpy(is_backbone).to(
@@ -516,7 +451,6 @@ class AddIsXFeats(Transform):
                 dtype=torch.bool
             )
 
-        # Virtual atom feats
         if "is_virtual" in self.X:
             data["feats"]["is_virtual"] = (
                 atom_array.element == VIRTUAL_ATOM_ELEMENT_NAME
@@ -543,12 +477,10 @@ class AddIsXFeats(Transform):
             )
             data["feats"]["is_motif_token_with_fully_fixed_coord"] = mask
 
-        # ... Central and CA
         if "is_central" in self.X:
             data["feats"]["is_central"] = _token_rep_mask
 
         if "is_ca" in self.X:
-            # Split into components to handle separately
             atom_array_indexed = atom_array[~atom_array.is_motif_atom_unindexed]
             _token_rep_mask_indexed = get_af3_token_representative_masks(
                 atom_array_indexed, central_atom="CA"
@@ -556,7 +488,6 @@ class AddIsXFeats(Transform):
             if atom_array.is_motif_atom_unindexed.any():
                 atom_array_unindexed = atom_array[atom_array.is_motif_atom_unindexed]
 
-                # Ensure is_ca represents one and the first atom only for unindexed tokens
                 def first_nonzero(n):
                     assert n > 0
                     x = np.zeros(n, dtype=bool)
@@ -581,15 +512,6 @@ class AddIsXFeats(Transform):
                 _token_rep_mask = _token_rep_mask_indexed
             data["feats"]["is_ca"] = _token_rep_mask
 
-            # Per-token N/CA/C atom indices, so a loss can rebuild virtual C-beta
-            # from PREDICTED coordinates using foundry.data.ss_adj._reconstruct_cb's
-            # formula (itself RFD1's generate_Cbeta, Rosetta params). Needed because
-            # the ADJ label is defined on C-beta while X_L is indexed by token
-            # representative (= C-alpha), and real CB is absent for glycine.
-            #
-            # Built over the SAME atom ordering as _token_rep_mask above; the assert
-            # catches the indexed/unindexed concatenation reordering rather than
-            # letting it silently misalign.
             _bb_idx, _bb_valid, _cb_idx, _has_cb = _token_backbone_indices(atom_array)
             assert len(_bb_idx) == int(_token_rep_mask.sum()), (
                 f"token backbone index count {len(_bb_idx)} != token count "
@@ -600,11 +522,6 @@ class AddIsXFeats(Transform):
             data["feats"]["token_cb_idx"] = torch.from_numpy(_cb_idx).long()
             data["feats"]["token_has_cb"] = torch.from_numpy(_has_cb).bool()
 
-            # Integer per-token chain index. AdjacencyContactLoss recovers SS blocks
-            # from adj-matrix row uniformity alone, which has no notion of chains --
-            # two tokens either side of a chain break with coincidentally identical
-            # rows would be merged into one block. _find_ss_blocks already splits on
-            # chain boundaries when the label is built; this lets the loss match.
             _tok_starts = get_token_starts(atom_array)
             _chain_ids = atom_array.chain_iid[_tok_starts]
             _, _chain_int = np.unique(_chain_ids, return_inverse=True)
@@ -647,15 +564,14 @@ class MotifCenterRandomAugmentation(Transform):
         And supplies the same rotated ground-truth coordinates as the input feature
         """
         if data["is_inference"]:
-            return data  # ori token behaviour set when creating atom array & in sampler
+            return data
 
-        xyz = data["coord_atom_lvl_to_be_noised"]  # (batch_size, n_atoms, 3)
+        xyz = data["coord_atom_lvl_to_be_noised"]
         mask_atom_lvl = data["ground_truth"]["mask_atom_lvl"]
         mask_atom_lvl = (
             mask_atom_lvl & ~data["feats"]["is_motif_atom_unindexed"]
-        )  # Avoid double weighting
+        )
 
-        # Handle the diffferent centering options
         is_motif_atom_with_fixed_coord = torch.tensor(
             data["atom_array"].is_motif_atom_with_fixed_coord, dtype=torch.bool
         )
@@ -672,10 +588,8 @@ class MotifCenterRandomAugmentation(Transform):
         mask_atom_lvl = mask_atom_lvl & center_mask
         mask_atom_lvl_expanded = mask_atom_lvl.expand(xyz.shape[0], -1)
 
-        # Masked center during training (nb not motif mask - just non-zero occupancy)
         xyz = masked_center(xyz, mask_atom_lvl_expanded)
 
-        # Random offset
         sigma_perturb = self.sigma_perturb
         if data["sampled_condition_name"] == "ppi":
             sigma_perturb = sigma_perturb * PPI_PERTURB_SCALE
@@ -692,7 +606,6 @@ class MotifCenterRandomAugmentation(Transform):
             * self.sigma_perturb
         )
 
-        # Apply random spin
         xyz = random_rigid_augmentation(xyz, batch_size=self.batch_size, s=0)
         data["coord_atom_lvl_to_be_noised"] = xyz
 
@@ -722,7 +635,6 @@ class AugmentNoise(Transform):
         device = data["coord_atom_lvl_to_be_noised"].device
         data["noise"][..., is_motif_atom_with_fixed_coord, :] = 0.0
 
-        # Add perturbation to the centre-of-mass
         if not data["is_inference"] or not is_motif_atom_with_fixed_coord.any():
             sigma_perturb_com = self.sigma_perturb_com
             if data["sampled_condition_name"] == "ppi":
@@ -732,7 +644,6 @@ class AugmentNoise(Transform):
             eps = eps * torch.clip((data["t"][:, None] / maxt) ** 3, min=0, max=1)
             data["noise"][..., ~is_motif_atom_with_fixed_coord, :] += eps[:, None, :]
 
-        # ... Zero out noise going into motif
         data["noise"][..., is_motif_atom_with_fixed_coord, :] = 0.0
 
         assert data["coord_atom_lvl_to_be_noised"].shape == data["noise"].shape
@@ -805,7 +716,6 @@ class AddAdditional1dFeaturesToFeats(Transform):
                 data["atom_array"].get_annotation(feature_name)
             ).float()
 
-            # ensure that feature_array is a 2d array with second dim n_dims
             if len(feature_array.shape) == 1 and n_dims == 1:
                 feature_array = feature_array.unsqueeze(1)
             elif len(feature_array.shape) != 2:
@@ -820,7 +730,6 @@ class AddAdditional1dFeaturesToFeats(Transform):
         elif self.autofill:
             feature_array = torch.zeros((len(data["atom_array"]), n_dims)).float()
 
-        # not in data['feats'], not in atomarray, and autofill is off
         else:
             raise ValueError(
                 f"{feature_type} 1d_feature `{feature_name}` is not present in atomarray, and autofill is False"
@@ -866,7 +775,7 @@ class FeaturizepLDDT(Transform):
         skip,
     ):
         self.skip = skip
-        self.bsplit = 80  # Threshold for splitting pLDDT into high and low
+        self.bsplit = 80
 
     def forward(self, data: dict) -> dict:
         atom_array = data["atom_array"]
@@ -889,7 +798,6 @@ class FeaturizepLDDT(Transform):
             mean_plddt = np.mean(plddt)
             ref_plddt = zeros + (1 if mean_plddt >= self.bsplit else -1)
 
-        # Provide only non-zero values for diffused tokens
         ref_plddt = (
             ~(get_motif_features(atom_array)["is_motif_token"][token_starts])
             * ref_plddt

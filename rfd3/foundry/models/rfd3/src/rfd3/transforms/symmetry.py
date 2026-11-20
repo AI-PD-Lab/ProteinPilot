@@ -28,10 +28,8 @@ class AddSymmetryFeats(Transform):
 
     def forward(self, data):
         atom_array = data["atom_array"]
-        # Get frames from atom_array
         transforms_dict = self.make_transforms_dict(atom_array)
-        data["feats"]["sym_transform"] = transforms_dict  # {str(id): tuple (R,T)}
-        # Else, add symmetry features atomwise
+        data["feats"]["sym_transform"] = transforms_dict
         for feature_name in self.symmetry_feats:
             feature_array = atom_array.get_annotation(feature_name)
             data["feats"][feature_name] = feature_array
@@ -39,7 +37,6 @@ class AddSymmetryFeats(Transform):
 
     def make_transforms_dict(self, atom_array):
         transforms_dict = {}
-        # get decomposed frames from atom array (unpacking the vectorized frames)
         Oris = torch.tensor(
             [
                 np.asarray(unpack_vector(Ori)).tolist()
@@ -64,7 +61,6 @@ class AddSymmetryFeats(Transform):
         Xs = torch.unique_consecutive(Xs, dim=0)
         Ys = torch.unique_consecutive(Ys, dim=0)
         TIDs = torch.unique_consecutive(TIDs, dim=0)
-        # the case in which there is only rotation (no translation), Ori = [0,0,0]
         if len(Oris) == 1 and (Oris == 0).all():
             Oris = Oris.repeat(len(Xs), 1)
         Rs, Ts = framecoords_to_RTs(Oris, Xs, Ys)

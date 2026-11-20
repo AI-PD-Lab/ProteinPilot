@@ -61,18 +61,16 @@ def wrap_dataset_and_sampler_with_fallbacks(
     Returns:
         tuple[Dataset, Sampler]: The wrapped dataset and sampler with fallbacks.
     """
-    # Instantiate a new fallback sampler to avoid scaling issues
     fallback_sampler = LazyWeightedRandomSampler(
         weights=sampler_to_fallback_to.weights
         if "weights" in sampler_to_fallback_to
         else torch.ones(len(dataset_to_fallback_to)),
         num_samples=int(1e9),
-        replacement=True,  # replacement for fallback dataloading, so we can draw a huge number of samples
+        replacement=True,
         generator=None,
         prefetch_buffer_size=4,
     )
 
-    # Wrap the dataset and sampler with fallback mechanisms
     wrapped_dataset = FallbackDatasetWrapper(
         dataset_to_be_wrapped, fallback_dataset=dataset_to_fallback_to
     )
@@ -94,14 +92,10 @@ def instantiate_single_dataset_and_sampler(cfg: DictConfig | dict) -> dict[str, 
     Returns:
         dict[str, Any]: A dictionary containing the instantiated dataset and sampler.
     """
-    # ... instantiate the dataset
     dataset = hydra.utils.instantiate(cfg.dataset)
 
-    # Users may provide only weights, in which case we will use a WeightedRandomSampler,
-    # or they may provide a sampler directly
 
     if "weights" in cfg and "sampler" not in cfg:
-        # ... instantiate the weights and create a WeightedRandomSampler
         weights = hydra.utils.instantiate(cfg.weights, dataset_df=dataset.data)
         sampler = WeightedRandomSampler(
             weights=weights,
@@ -109,7 +103,6 @@ def instantiate_single_dataset_and_sampler(cfg: DictConfig | dict) -> dict[str, 
             replacement=True,
         )
     elif "sampler" in cfg and "weights" not in cfg:
-        # ... instantiate the sampler with the number of samples
         sampler = hydra.utils.instantiate(cfg.sampler)
     else:
         dataset_name = getattr(getattr(cfg.dataset, "dataset", None), "name", None)
@@ -143,17 +136,13 @@ def recursively_instantiate_datasets_and_samplers(
     Returns:
         dict[str, Any]: A dictionary containing the instantiated dataset and sampler.
     """
-    # ------- Base case (1): A single "leaf" dataset -------#
     if "dataset" in cfg:
         return {**instantiate_single_dataset_and_sampler(cfg), "name": name}
 
-    # ------- Recursive case (2): Multiple sub-datasets that must be concatenated together -------#
     elif "sub_datasets" in cfg:
-        # ... create a list of dictionaries for each sub-dataset
         datasets_info = []
         for sub_dataset_name, sub_dataset_cfg in cfg.sub_datasets.items():
             if sub_dataset_cfg is None:
-                # (Skip any None sub-datasets; e.g., those overrode by the experiment config)
                 continue
 
             datasets_info.append(
@@ -162,8 +151,6 @@ def recursively_instantiate_datasets_and_samplers(
                 )
             )
 
-        # ... concatenate sub-datasets and weights (e.g., "interfaces" and "pn_units" into one ConcatDataset)
-        # NOTE: Order of the weights must match the order of the datasets!
         concatenated_dataset = ConcatDatasetWithID(
             datasets=[info["dataset"] for info in datasets_info]
         )
@@ -178,15 +165,12 @@ def recursively_instantiate_datasets_and_samplers(
 
         return {"dataset": concatenated_dataset, "sampler": sampler, "name": name}
 
-    # ------- Recursive case (3): Multiple datasets that must be sampled from with specified probabilities -------#
     else:
         datasets_info = []
         for nested_dataset_name, nested_dataset_cfg in cfg.items():
             if nested_dataset_cfg is None:
-                # (Skip any None training datasets; e.g., those overrode by the experiment config)
                 continue
 
-            # (To use a MixedSampler, we must provide a "probability" key for each dataset)
             assert (
                 "probability" in nested_dataset_cfg
             ), "Expected 'probability' key in dataset configuration"
@@ -199,13 +183,11 @@ def recursively_instantiate_datasets_and_samplers(
                 }
             )
 
-        # ... check that the sum of probabilities of all datasets is 1
         assert (
             abs(1 - sum(dataset_info["probability"] for dataset_info in datasets_info))
             < 1e-5
         ), "Sum of probabilities must be 1.0"
 
-        # ... compose the list of datasets into a single dataset
         composed_train_dataset = ConcatDatasetWithID(
             datasets=[dataset["dataset"] for dataset in datasets_info]
         )
@@ -258,7 +240,6 @@ def assemble_distributed_loader(
         loader_cfg = {}
 
     if isinstance(sampler, MixedSampler):
-        # (If given a MixedSampler, we must convert to a DistributedMixedSampler)
         assert (
             rank is not None
             and world_size is not None
@@ -273,7 +254,6 @@ def assemble_distributed_loader(
             drop_last=drop_last,
         )
     elif isinstance(sampler, (RandomSampler, SequentialSampler)):
-        # (If given a RandomSampler or SequentialSampler, we must convert to a DistributedSampler)
         assert (
             rank is not None and world_size is not None
         ), "Rank and world_size must be provided for RandomSampler or SequentialSampler"
@@ -285,10 +265,8 @@ def assemble_distributed_loader(
             drop_last=drop_last,
         )
     elif sampler is None and isinstance(dataset, Subset):
-        # We are subsetting the dataset to a specific set of example IDs
         ranked_logger.info(f"Subsetting dataset to {len(dataset)} examples!")
     else:
-        # (We assume we are already given a DistributedSampler or DistributedMixedSampler)
         assert (
             rank is None and world_size is None
         ), "Rank and world_size will have no effect on the provided sampler and should be None"
@@ -296,7 +274,6 @@ def assemble_distributed_loader(
             sampler, (DistributedSampler, DistributedMixedSampler)
         ), "Invalid sampler type for distributed training."
 
-    # ... wrap the composed dataset and sampler with a fallback mechanism, if needed
     if (
         "n_fallback_retries" in loader_cfg
         and loader_cfg.n_fallback_retries > 0
@@ -313,11 +290,10 @@ def assemble_distributed_loader(
             n_fallback_retries=loader_cfg.n_fallback_retries,
         )
 
-    # ... assemble the final loader
     loader = DataLoader(
         dataset=dataset,
         sampler=sampler,
-        collate_fn=lambda x: x,  # No collation
+        collate_fn=lambda x: x,
         **loader_cfg.dataloader_params if "dataloader_params" in loader_cfg else {},
     )
 
@@ -355,11 +331,9 @@ def assemble_val_loader_dict(
         world_size (int, optional): The total number of processes participating in the distributed training. Defaults to 1.
         loader_cfg (DictConfig, optional): Additional configuration parameters for the DataLoader, such as `batch_size` and `num_workers`. Defaults to None.
     """
-    # ... loop through the validation datasets and create a DataLoader for each, preserving the dataset name
     val_loaders = {}
     for val_dataset_name, val_dataset in cfg.items():
         if not val_dataset:
-            # (Skip any None validation datasets; e.g., those overrode by the experiment config)
             continue
 
         assert (
@@ -367,10 +341,9 @@ def assemble_val_loader_dict(
         ), f"Expected 'dataset' key in validation dataset config for {val_dataset_name}"
         dataset = hydra.utils.instantiate(
             val_dataset.dataset
-        )  # directly instantiate the dataset
+        )
 
         if "key_to_balance" in val_dataset and val_dataset.key_to_balance:
-            # (If a key is provided to balance the dataset, we will use a LoadBalancedDistributedSampler)
             key_to_balance = val_dataset.key_to_balance
             ranked_logger.info(f"Balancing dataset with key: {key_to_balance}")
 
@@ -385,7 +358,6 @@ def assemble_val_loader_dict(
                 key_to_balance=key_to_balance,
             )
         else:
-            # (Otherwise, we will use a DistributedSampler, without regard to sample size)
             sampler = DistributedSampler(
                 dataset,
                 num_replicas=world_size,

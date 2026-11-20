@@ -21,7 +21,6 @@ class SSRatioEncoder(nn.Module):
         super().__init__()
         self.num_freqs = num_freqs
 
-        # Fixed (non-learned) Fourier frequencies: k * π for k = 1 … num_freqs
         freqs = torch.arange(1, num_freqs + 1).float() * math.pi
         self.register_buffer("freqs", freqs)
 
@@ -29,8 +28,6 @@ class SSRatioEncoder(nn.Module):
         self.act = nn.SiLU()
         self.linear2 = nn.Linear(c_s, c_s)
 
-        # Zero-init: at the start of fine-tuning the encoder contributes
-        # nothing to S_I, preserving frozen-checkpoint behaviour exactly.
         nn.init.zeros_(self.linear2.weight)
         nn.init.zeros_(self.linear2.bias)
 
@@ -41,17 +38,15 @@ class SSRatioEncoder(nn.Module):
         Returns:
             [I, c_s]  additive contribution to S_I (zero for unconditional tokens)
         """
-        # Build unconditional mask before clamping destroys the sentinel
-        mask = (ss_ratio > -0.5).float()          # [I, 1]  1 = conditioned
+        mask = (ss_ratio > -0.5).float()
 
-        x = ss_ratio.clamp(0.0, 1.0)              # [I, 1]
+        x = ss_ratio.clamp(0.0, 1.0)
 
-        # Fixed Fourier expansion:  [I, 1] × [num_freqs] → [I, num_freqs]
-        angles = x * self.freqs                    # broadcast: [I, num_freqs]
+        angles = x * self.freqs
         fourier = torch.cat(
             [torch.sin(angles), torch.cos(angles)], dim=-1
-        )                                          # [I, 2*num_freqs]
+        )
 
-        out = self.linear2(self.act(self.linear1(fourier)))  # [I, c_s]
+        out = self.linear2(self.act(self.linear1(fourier)))
 
-        return out * mask                          # zero out unconditional samples
+        return out * mask

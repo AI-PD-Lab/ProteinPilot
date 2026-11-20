@@ -104,10 +104,8 @@ class MetricManager:
             raise_errors: Whether to raise errors on metric failures. Defaults to ``True``.
         """
         if isinstance(metrics, list):
-            # Convert list of tuples to dict
             metrics = dict(metrics)
 
-        # Validate all are Metric instances
         for name, metric in metrics.items():
             if not isinstance(metric, Metric):
                 raise TypeError(
@@ -123,23 +121,19 @@ class MetricManager:
     def __call__(self, **kwargs: Any) -> dict[str, Any]:
         """Compute all metrics and return their results as a dictionary mapping metric names to their computed values."""
 
-        # Extract example_id if it exists
         example_id = nested_dict.get(
             kwargs, key=("extra_info", "example_id"), default=None
         )
 
-        # Initialize results dictionary
         results = {"example_id": example_id}
 
         for name, metric in self.metrics.items():
             assert name not in results, f"Duplicate metric name: {name}"
 
-            # Add some nice error handling context in case metrics fail
             example_msg = (
                 f" for example '{example_id}'" if example_id is not None else ""
             )
 
-            # Decide whether the Metric applies to this batch
             if "extra_info" in kwargs and "metrics_tags" in kwargs["extra_info"]:
                 metrics_tags = kwargs["extra_info"]["metrics_tags"]
                 metrics_tags = set(metrics_tags)
@@ -161,10 +155,8 @@ class MetricManager:
                 raise_error=self.raise_errors,
                 exc_types=(MetricInputError, ValueError, TypeError, AttributeError),
             ):
-                # ... compute the metric
                 metric_result = metric.compute_from_kwargs(**kwargs)
 
-                # ... append 'name' to the keys of the metric result to ensure uniqueness
                 if isinstance(metric_result, dict):
                     metric_result = keymap(lambda k: f"{name}.{k}", metric_result)
                     results.update(metric_result)
@@ -198,7 +190,6 @@ class Metric(ABC):
         *args: Any,
         **kwargs: Any,
     ) -> None:
-        # Set required and prohibited tags
         self.required_tags_all = (
             set(required_tags_all) if exists(required_tags_all) else set()
         )
@@ -214,14 +205,12 @@ class Metric(ABC):
                 "Conflicting tags found: required tags and prohibited tags must be disjoint."
             )
 
-        # Check that the 'keys' of the kwargs_to_compute_args are a subset of the 'compute' method signature
         if self.kwargs_to_compute_args:
             assert self.kwargs_to_compute_args.keys() <= self.required_compute_args, (
                 f"The keys of kwargs_to_compute_args must be a subset of the 'compute' method signature. "
                 f"{self.kwargs_to_compute_args.keys()} is not a subset of {self.required_compute_args}"
             )
 
-        # Check that optional_kwargs are also in the kwargs_to_compute_args
         if self.kwargs_to_compute_args and self.optional_kwargs:
             assert self.optional_kwargs <= set(self.kwargs_to_compute_args.keys()), (
                 f"All optional_kwargs must be defined in kwargs_to_compute_args. "
@@ -253,20 +242,17 @@ class Metric(ABC):
             compute_inputs = {}
             for compute_arg, kwargs_key in self.kwargs_to_compute_args.items():
                 if compute_arg in self.optional_kwargs:
-                    # Optional parameter - only add if present
                     try:
                         compute_inputs[compute_arg] = nested_dict.getitem(
                             kwargs, key=kwargs_key
                         )
                     except KeyError:
-                        pass  # Don't pass this parameter to compute()
+                        pass
                 else:
-                    # Required parameter - use getitem (will raise if missing)
                     compute_inputs[compute_arg] = nested_dict.getitem(
                         kwargs, key=kwargs_key
                     )
         else:
-            # If kwargs_to_compute_args is not defined, use kwargs directly
             compute_inputs = kwargs
         return self.compute(**compute_inputs)
 

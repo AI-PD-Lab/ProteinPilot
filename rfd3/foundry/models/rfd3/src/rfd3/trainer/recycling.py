@@ -29,9 +29,7 @@ def get_recycle_schedule(
     References:
         AF-2 Supplement, Algorithm 31
     """
-    # We use a context manager to avoid modifying the global RNG state
     with rng_state(create_rng_state_from_seeds(torch_seed=seed)):
-        # ...generate a recycling schedule for each epoch
         recycle_schedule = []
         for i in range(n_epochs):
             schedule = torch.randint(

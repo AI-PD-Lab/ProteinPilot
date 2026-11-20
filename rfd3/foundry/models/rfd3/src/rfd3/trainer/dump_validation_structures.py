@@ -63,14 +63,11 @@ class DumpValidationStructuresCallback(BaseCallback):
     ) -> Path:
         """Helper function to build a path from a training or validation example_id."""
         try:
-            # ... try to extract the PDB ID and assembly ID from the example ID
             parsed_id = parse_example_id(example_id)
             identifier = f"{parsed_id['pdb_id']}_{parsed_id['assembly_id']}"
         except (KeyError, ValueError):
-            # ... if parsing fails, fall back to the original example ID
             identifier = example_id
 
-        # ... parse the example_id into a dictionary of components
         epoch_str = "epoch_{}".format(epoch) if epoch else ""
         return (
             self.save_dir / dir / f"{epoch_str}" / dataset_name / f"{identifier}{extra}"
@@ -86,7 +83,7 @@ class DumpValidationStructuresCallback(BaseCallback):
         **_,
     ):
         if (not self.dump_predictions) and (not self.dump_trajectories):
-            return  # Nothing to do
+            return
         current_epoch = trainer.state["current_epoch"]
         if current_epoch % self.dump_every_n != 0:
             ranked_logger.debug(
@@ -101,7 +98,7 @@ class DumpValidationStructuresCallback(BaseCallback):
         network_output = outputs["network_output"]
         atom_array_stack = outputs["predicted_atom_array_stack"]
         prediction_metadata = outputs["prediction_metadata"]
-        example = batch[0]  # Assume batch size = 1
+        example = batch[0]
 
         _build_path_from_example_id = functools.partial(
             self._build_path_from_example_id,

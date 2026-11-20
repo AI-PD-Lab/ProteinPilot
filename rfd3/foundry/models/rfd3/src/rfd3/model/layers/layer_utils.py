@@ -23,7 +23,6 @@ except (ImportError, ModuleNotFoundError):
     RMSNorm_ = nn.RMSNorm
 
 
-# Allow bias=False to be passed for RMSNorm
 def RMSNorm(*args, **kwargs):
     if "bias" in kwargs:
         kwargs.pop("bias")
@@ -102,7 +101,7 @@ class MultiDimLinear(nn.Linear):
 
 class LinearBiasInit(nn.Linear):
     def __init__(self, *args, biasinit, **kwargs):
-        assert biasinit == -2.0  # Sanity check
+        assert biasinit == -2.0
         self.biasinit = biasinit
         super().__init__(*args, **kwargs)
 
@@ -144,8 +143,8 @@ class AdaLN(nn.Module):
 
     def forward(
         self,
-        Ai,  # [B, I, C_a]
-        Si,  # [B, I, C_s]
+        Ai,
+        Si,
     ):
         """
         Output:

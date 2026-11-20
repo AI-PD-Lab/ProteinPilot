@@ -24,7 +24,6 @@ class BaseCallback(ABC):
         - Callbacks Flow (https://pytorch-lightning.readthedocs.io/en/0.10.0/callbacks.html#callbacks)
     """
 
-    # Epoch loops
     def on_fit_start(self, trainer: Any):
         """Called at the start of the training"""
         pass
@@ -33,7 +32,6 @@ class BaseCallback(ABC):
         """Called at the end of the training"""
         pass
 
-    # Training loop
     def on_train_epoch_start(self, trainer: Any):
         """Called at the start of each training epoch"""
         pass
@@ -78,7 +76,6 @@ class BaseCallback(ABC):
         """Called at the end of each training epoch"""
         pass
 
-    # Validation loop
     def on_validation_epoch_start(self, trainer: Any):
         """Called at the start of each validation epoch"""
         pass
@@ -110,7 +107,6 @@ class BaseCallback(ABC):
         """Called at the end of each validation epoch"""
         pass
 
-    # Saving and Loading
     def on_save_checkpoint(self, trainer: Any, state: dict[str, Any]):
         """Called when saving a checkpoint"""
         pass

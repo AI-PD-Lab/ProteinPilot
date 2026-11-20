@@ -26,20 +26,18 @@ for _a in sys.argv[1:]:
         HARMONIA_W = float(_a.split("=", 1)[1])
     else:
         _args.append(_a)
-# The patches below live in this process. Dataloader workers would get a fresh
-# copy of the dataset class without them, so load in-process unless asked otherwise.
 if not any(_a.split("=", 1)[0].lstrip("+~") == "num_workers" for _a in _args):
     _args.append("num_workers=0")
 sys.argv = [sys.argv[0]] + _args
 
-from harmonia_ext.adj_model import register  # noqa: E402
+from harmonia_ext.adj_model import register
 
 register()
 
-from harmonia_ext.generate import install_guidance  # noqa: E402
-import rfproteina.generate as G  # noqa: E402
-from rfproteina.conditions import C_SEC  # noqa: E402
-from rfproteina.inference_utils import datasets as DS  # noqa: E402
+from harmonia_ext.generate import install_guidance
+import rfproteina.generate as G
+from rfproteina.conditions import C_SEC
+from rfproteina.inference_utils import datasets as DS
 
 _orig_getitem = DS.DesignProblemDataset.__getitem__
 _reported = set()
@@ -66,8 +64,6 @@ def getitem_with_adj(self, idx):
         raise ValueError("HARMONIA: %s is %s but %s has %d tokens after RFD4's pipeline"
                          % (path, adj.shape, cif, n))
     feats["adj_state"] = torch.from_numpy(adj.astype(np.int16))
-    # <stem>.ss.npy, when present, must say what the CIF's C_SEC says (ProteinPilot
-    # codes 0 H / 1 E / 2 L / 3 masked -> C_SEC 1 / 2 / 3 / 0).
     ss_path = path[: -len(".adj.npy")] + ".ss.npy"
     if os.path.isfile(ss_path) and C_SEC.full_name in feats:
         want = np.array([(1, 2, 3, 0)[int(v)] for v in np.load(ss_path)], dtype=np.int64)
@@ -100,6 +96,6 @@ def load_with_guidance(cfg, model=None):
 
 G.load_ckpt_n_configure_inference = load_with_guidance
 
-from script_utils.entrypoints import generate  # noqa: E402
+from script_utils.entrypoints import generate
 
 generate()

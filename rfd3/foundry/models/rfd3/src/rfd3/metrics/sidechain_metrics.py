@@ -25,7 +25,6 @@ def collapsing_virtual_atoms_batched(
     for atom_array in atom_arrays:
         virtual_atom_mask = np.zeros(len(atom_array), dtype=bool)
 
-        # We need to select residues by the combination of chain_iid and res_id.
         chain_iid_with_sep = np.char.add(atom_array.chain_iid, "|")
         chain_iid_and_res_id = np.char.add(
             chain_iid_with_sep, atom_array.res_id.astype(str)
@@ -34,14 +33,10 @@ def collapsing_virtual_atoms_batched(
         unique_residue_identifiers = np.unique(chain_iid_and_res_id)
 
         for res_identifier in unique_residue_identifiers:
-            # ... Pick the current residue
             cur_mask = atom_array.chain_iid_and_res_id == res_identifier
             cur_residue = atom_array[cur_mask]
             cur_central_atom = central_atom
 
-            # For Glycine: it doesn't have CB, so set the virtual atom as CA.
-            # The current way to handle this is to check if predicted CA and CB are too close, because in the case of glycine and we pad virtual atoms based on CB, CB's coords are set as CA.
-            # There might be a better way to do this.
             CA_coord = cur_residue.coord[cur_residue.atom_name == "CA"]
             CB_coord = cur_residue.coord[cur_residue.atom_name == "CB"]
             if np.linalg.norm(CA_coord - CB_coord) < threshold:
@@ -52,13 +47,11 @@ def collapsing_virtual_atoms_batched(
             if not np.any(central_mask):
                 continue
 
-            # ... Calculate the distance to the central atom
             central_coord = cur_residue.coord[central_mask][
                 0
-            ]  # Should only have one central atom anyway
+            ]
             dists = np.linalg.norm(cur_residue.coord - central_coord, axis=-1)
 
-            # ... Select virtual atom by the distance. Shouldn't count the central atom itself. (F)
             is_virtual = (dists < threshold) & ~central_mask
 
             virtual_atom_mask[np.where(cur_mask)[0][is_virtual]] = True
@@ -86,16 +79,14 @@ def construct_graph(coords, cutoff_min, cutoff_max):
     Returns:
         G: A NetworkX graph
     """
-    dists = cdist(coords, coords)  # [N, N]
+    dists = cdist(coords, coords)
 
     G = nx.Graph()
     n_atoms = coords.shape[0]
 
-    # ... Add nodes
     for i in range(n_atoms):
         G.add_node(i)
 
-    # ... Add edges based on distance
     for i in range(n_atoms):
         for j in range(i + 1, n_atoms):
             if cutoff_min < dists[i, j] < cutoff_max:
@@ -125,7 +116,6 @@ def check_sidechain_quality(atom_array, dist_threshold_min=1, dist_threshold_max
      - unintended_bonds_percent (float): percentage of sidechains with unintended bonds with other sidechains.
      - clash_percent (float): percentage of sidechains that has collapse in itself.
     """
-    # Step 1: Build standard amino acid graphs
     standard_aa = [
         "ALA",
         "ARG",
@@ -151,13 +141,11 @@ def check_sidechain_quality(atom_array, dist_threshold_min=1, dist_threshold_max
 
     standard_aa_atom_array = [residue(aa) for aa in standard_aa]
 
-    # ... Remove OXT atoms and hydrogens
     standard_aa_atom_array = [
         aa[(~np.isin(aa.atom_name, np.array(["OXT"]))) & (aa.element != "H")]
         for aa in standard_aa_atom_array
     ]
 
-    # ... Convert standard AA to topology graphs
     standard_aa_graphs = []
     for aa in standard_aa_atom_array:
         try:
@@ -169,7 +157,6 @@ def check_sidechain_quality(atom_array, dist_threshold_min=1, dist_threshold_max
             print(f"Failed to convert {aa} to graph: {e}")
             standard_aa_graphs.append(None)
 
-    # We need to select residues by the combination of chain_iid and res_id.
     chain_iid_with_sep = np.char.add(atom_array.chain_iid, "|")
     chain_iid_and_res_id = np.char.add(
         chain_iid_with_sep, atom_array.res_id.astype(str)
@@ -178,7 +165,6 @@ def check_sidechain_quality(atom_array, dist_threshold_min=1, dist_threshold_max
     unique_residue_identifiers = np.unique(chain_iid_and_res_id)
     matches = {}
 
-    # ... Map predicted sidechain to any standard amino acids
     for res_identifier in unique_residue_identifiers:
         matches[res_identifier] = []
         cur_res_coords = atom_array.coord[
@@ -203,49 +189,37 @@ def check_sidechain_quality(atom_array, dist_threshold_min=1, dist_threshold_max
             if are_graphs_isomorphic(cur_graph, aa_graph):
                 matches[res_identifier].append(standard_aa[aa_idx])
 
-    # Step 2: Check if the inter and intra-residue quality is good.
-    # (1) Check if there are potential bonds between sidechains from different residues.
-    # (2) Check if atoms are too close to collapse.
 
     coords = atom_array.coord
     residue_identifiers = atom_array.chain_iid_and_res_id
 
-    # ... Mask sidechain atoms. Now the sidechain is any atoms except four backbone atoms
     is_sidechain = ~np.isin(atom_array.atom_name, np.array(["N", "CA", "C", "O"]))
 
     coords_sc = coords[is_sidechain]
     residue_identifiers_sc = residue_identifiers[is_sidechain]
 
-    # ... Calculate pairwise distances
     dists = cdist(coords_sc, coords_sc)
 
-    # ... Check if there are potential bonds between sidechains from different residues.
     unintended_bonds = {
         res_identifier: False for res_identifier in unique_residue_identifiers
     }
     N = dists.shape[0]
 
-    # Only look at the upper triangle (exclude diagonal)
     iu, ju = np.triu_indices(N, k=1)
 
-    # Apply distance threshold to identify any possible bonds
     potential_bonds = (dists[iu, ju] > dist_threshold_min) & (
         dists[iu, ju] < dist_threshold_max
     )
 
-    # Check if atoms are from different residues
     diff_res_mask = residue_identifiers_sc[iu] != residue_identifiers_sc[ju]
 
-    # Combine both masks
     bonds_mask = potential_bonds & diff_res_mask
 
-    # ... Annotate residues with unintended bonds
     for idx in range(len(bonds_mask)):
         if bonds_mask[idx]:
             unintended_bonds[residue_identifiers_sc[iu[idx]]] = True
             unintended_bonds[residue_identifiers_sc[ju[idx]]] = True
 
-    # ... Check if atoms are too close to be real
     clash_residues = {
         res_identifier: False for res_identifier in unique_residue_identifiers
     }
@@ -255,7 +229,6 @@ def check_sidechain_quality(atom_array, dist_threshold_min=1, dist_threshold_max
             clash_residues[residue_identifiers_sc[iu[idx]]] = True
             clash_residues[residue_identifiers_sc[ju[idx]]] = True
 
-    # ... Output the final valid sidechains
     if_valid_sidechains = [
         (len(matches[res_identifier]) > 0)
         & (~unintended_bonds[res_identifier])
@@ -333,7 +306,6 @@ class SidechainMetrics(Metric):
             self.already_removed_virtual_atoms,
         )
 
-        # Aggregate output for batch-level metrics
         o = {
             "mean_valid_sidechain_percent": float(
                 np.mean([m["valid_sidechain_percent"] for m in batch_metrics])
@@ -344,6 +316,5 @@ class SidechainMetrics(Metric):
             "mean_clash_percent": float(
                 np.mean([m["clash_percent"] for m in batch_metrics])
             ),
-            # "mapped_restype": [m["mapped_restype"] for m in batch_metrics],
         }
         return o

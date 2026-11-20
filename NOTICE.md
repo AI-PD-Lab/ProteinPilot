@@ -6,14 +6,13 @@ HARMONIA is a combination of original code and code derived from BSD-licensed up
 
 The original HARMONIA contributions:
 
-- `rfd4/harmonia_ext/` and `rfd4/triadj_ext/` (all files)
-- `rfd3/scripts/`, `rfd3/docs/`, `rfd3/patches/`, `checkpoints/`
+- `rfd4/harmonia_ext/` (all files)
+- `rfd3/scripts/`, `rfd3/docs/`, `checkpoints/`
 - the SS/ADJ and ss_ratio additions to RFD3:
   `rfd3/foundry/src/foundry/data/ss_adj.py`, and under `rfd3/foundry/models/rfd3/`:
   `src/rfd3/model/layers/ss_adj_adapters.py`, `src/rfd3/model/layers/ss_conditioning.py`, `src/rfd3/model/ss_adj_cfg.py`,
-  `src/rfd3/train_ss_adj.py`, `src/rfd3/transforms/ss_adj_transforms.py`, `tests/test_ss_adj*.py`, and every config file whose name contains
-  `ss_adj`, `adjacency` or `ss_ratio`
-- the changes HARMONIA made inside upstream files (the SS/ADJ hooks in `TokenInitializer`, the adjacency loss, the pipelines)
+  `src/rfd3/transforms/ss_adj_transforms.py`
+- the changes HARMONIA made inside upstream files (the SS/ADJ hooks in `TokenInitializer`, the pipelines)
 - the fine-tuned weights `Harmonia-RFD3.ckpt` and `Harmonia-RFD4/` (the changes the fine-tuning added to the base weights)
 
 ## BSD 3-Clause ([`LICENSE-BSD-3-Clause`](LICENSE-BSD-3-Clause))

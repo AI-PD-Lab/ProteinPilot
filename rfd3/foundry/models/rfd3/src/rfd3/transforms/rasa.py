@@ -31,7 +31,6 @@ class CalculateRASA(Transform):
         if not np.any(atom_array.is_ligand) and self.requires_ligand:
             return data
 
-        # Calculate exact rasa
         rasa = calculate_atomwise_rasa(
             atom_array, self.probe_radius, self.atom_radii, self.point_number
         )
@@ -47,12 +46,12 @@ def discretize_rasa(atom_array, low=0, high=0.2, n_bins=3, keep_protein_motif=Fa
     if not keep_protein_motif:
         inclusion_mask = inclusion_mask & ~atom_array.is_protein
 
-    bin_edges = np.linspace(low, high, n_bins)  # e.g., [0.0, 0.1, 0.2]
+    bin_edges = np.linspace(low, high, n_bins)
     bins = (
         np.digitize(atom_array.rasa, bin_edges, right=False)
-        - 1  # Subtract 1 since first bin would mean negative rasa!
-    )  # bins in [0, n_bins-1]
-    bins[~inclusion_mask] = n_bins  # Assign excluded atoms to an additional, unused bin
+        - 1
+    )
+    bins[~inclusion_mask] = n_bins
     return bins
 
 
@@ -65,7 +64,7 @@ class SetZeroOccOnDeltaRASA(Transform):
 
     requires_previous_transforms = [CalculateRASA]
     incompatible_previous_transforms = [
-        "PadWithVirtualAtoms",  # must have the same atom names
+        "PadWithVirtualAtoms",
         "CreateDesignReferenceFeatures",
         "AggregateFeaturesLikeAF3WithoutMSA",
     ]
@@ -105,11 +104,9 @@ class SetZeroOccOnDeltaRASA(Transform):
             & atom_array.is_residue
         )
 
-        # Set zero occupancy for sidechains only
         atom_has_become_exposed = token_has_become_exposed & is_sidechain
 
         atom_array.occupancy[atom_has_become_exposed] = 0.0
-        # atom_array.res_name[token_has_become_exposed] = "UNK"
 
         data["atom_array"] = atom_array
 
