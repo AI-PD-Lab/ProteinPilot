@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.png" alt="Protein Pilot" width="220"></p>
+
 # HARMONIA
 
 Adjacency-conditioned protein design for RFdiffusion3 and RFdiffusion4.
